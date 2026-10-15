@@ -80,6 +80,7 @@ The settings are in the text file `~/.config/pixelpal/config.toml` (TOML). The s
 | Setting | Effect |
 |---|---|
 | Walk on the desktop | Turns the walking on or off. |
+| Hop while walking | Lets Link hop at random moments of a walk (about one hop in three seconds). The shadow of the game stays on the ground. The height follows the gravity setting. |
 | Play actions, action chance | Turns the random actions on or off, and sets the probability that an action follows a pause instead of a walk (default 50 %). |
 | Walk speed, pause between walks | Speed in px/s, and the random pause in seconds. |
 | Vary the walk speed | Each walk gets a random gait: a stroll (½ of the walk speed), a walk, a hurry (1.7×), or a Pegasus dash (3.5×) after a short run in place. |

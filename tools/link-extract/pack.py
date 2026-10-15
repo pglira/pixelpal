@@ -125,8 +125,12 @@ def main():
     size, origin, poses = read_poses(src)
 
     groups = {}
+    shadows = []
     for p in poses:
-        groups.setdefault((p["yt"], p["dir"]), []).append(p)
+        if p["yt"] < 0:
+            shadows.append(p)
+        else:
+            groups.setdefault((p["yt"], p["dir"]), []).append(p)
 
     index = {
         "fps": 60,
@@ -135,9 +139,23 @@ def main():
             "origin: Link's coordinate point inside a frame; align it across frames.",
             "sequences: [frame index, duration in game frames]; duration 0 = hold until an event.",
             "same_as: the strip of another direction holds the identical frames.",
+            "shadows: the ground shadow per direction; its origin is Link's coordinate point on the ground.",
         ],
         "animations": {},
+        "shadows": {},
     }
+    for s in shadows:
+        box = s["image"].getbbox()
+        if not box:
+            continue
+        file = f"shadow_{DIRECTIONS[s['dir']]}.png"
+        s["image"].crop(box).save(out / file)
+        index["shadows"][DIRECTIONS[s["dir"]]] = {
+            "file": file,
+            "frame_width": box[2] - box[0],
+            "frame_height": box[3] - box[1],
+            "origin": [origin - box[0], origin - box[1]],
+        }
     seen = {}
     rows = []
     for (yt, d), frames in sorted(groups.items()):

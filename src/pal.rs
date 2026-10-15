@@ -119,7 +119,31 @@ pub struct Pal {
     facing: Dir,
     /// Distance of the current walk, in points.
     walk_distance: f32,
+    /// The current hop, if any.
+    hop: Option<Hop>,
 }
+
+/// A hop during a walk: Link leaves the ground, and his shadow stays on it.
+#[derive(Clone, Copy, Debug)]
+struct Hop {
+    start: f64,
+    /// Upward start speed, in sprite pixels per second.
+    v0: f32,
+}
+
+impl Hop {
+    /// Height above the ground at `now`, in sprite pixels, for the gravity
+    /// `g` in sprite pixels per second². Negative after the landing.
+    fn height(&self, now: f64, g: f32) -> f32 {
+        let t = (now - self.start) as f32;
+        self.v0 * t - g * t * t / 2.0
+    }
+}
+
+/// Mean number of hops per second of walking.
+const HOP_RATE: f32 = 0.35;
+/// Range of the hop heights, in sprite pixels.
+const HOP_HEIGHT: (f32, f32) = (5.0, 11.0);
 
 impl Pal {
     pub fn new(pos: Pos2) -> Self {
@@ -129,7 +153,15 @@ impl Pal {
             mood: Mood::Calm,
             facing: Dir::Down,
             walk_distance: 0.0,
+            hop: None,
         }
+    }
+
+    /// Height of the current hop above the ground, in sprite pixels.
+    fn hop_height(&self, now: f64, cfg: &Config) -> f32 {
+        self.hop
+            .map_or(0.0, |h| h.height(now, cfg.gravity * PIXELS_PER_METER))
+            .max(0.0)
     }
 
     pub fn window_size(scale: u32) -> Vec2 {
@@ -142,6 +174,7 @@ impl Pal {
 
     pub fn hold(&mut self) {
         self.motion = Motion::Held;
+        self.hop = None;
     }
 
     pub fn release(&mut self) {
@@ -266,9 +299,25 @@ impl Pal {
                         };
                     } else {
                         self.pos.x += step * d.signum();
+                        if cfg.hops && self.hop.is_none() && fastrand::f32() < HOP_RATE * dt {
+                            let h = HOP_HEIGHT.0 + fastrand::f32() * (HOP_HEIGHT.1 - HOP_HEIGHT.0);
+                            self.hop = Some(Hop {
+                                start: now,
+                                v0: (2.0 * cfg.gravity * PIXELS_PER_METER * h).sqrt(),
+                            });
+                        }
                     }
                 }
             }
+        }
+
+        // A hop ends at the landing, and with any motion other than a walk or a
+        // stand. A hop at the end of a walk lands in the stand.
+        if let Some(h) = self.hop
+            && (h.height(now, cfg.gravity * PIXELS_PER_METER) < 0.0
+                || !matches!(self.motion, Motion::Walk { .. } | Motion::Stand { .. }))
+        {
+            self.hop = None;
         }
 
         // Keep the pal inside the area and on the ground. A drop from above
@@ -390,17 +439,34 @@ impl Pal {
     /// Draws the pal into `rect`, the full pal window.
     pub fn paint(&self, painter: &Painter, rect: Rect, sprites: &Sprites, cfg: &Config, now: f64) {
         let scale = cfg.scale as f32;
-        let mut hop = 0.0;
+        let mut hop = self.hop_height(now, cfg) * scale;
         if let Mood::Happy { until } = self.mood {
             let t = (HAPPY_SECONDS - (until - now)) as f32;
             if t < 1.0 {
-                hop = (t * 2.0 * TAU / 2.0).sin().abs() * 4.0 * scale;
+                hop += (t * 2.0 * TAU / 2.0).sin().abs() * 4.0 * scale;
             }
         }
-        let body = Self::body(rect, sprites, scale).translate(vec2(0.0, -hop));
+        let ground = Self::body(rect, sprites, scale);
+        let body = ground.translate(vec2(0.0, -hop));
         let origin = pos2(body.left(), body.bottom() - sprites.feet * scale);
 
         let (anim, dir, frame) = self.shot(scale, cfg.walk_stride, now);
+
+        // In the air, the shadow stays on the ground below Link.
+        if hop > 0.0
+            && let Some(shadow) = sprites.shadow(dir)
+        {
+            let ground_origin = pos2(ground.left(), ground.bottom() - sprites.feet * scale);
+            painter.image(
+                shadow.texture.id(),
+                Rect::from_min_size(
+                    (ground_origin - shadow.origin * scale).round(),
+                    shadow.size * scale,
+                ),
+                Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
+                Color32::WHITE,
+            );
+        }
         let clip = sprites
             .clip(anim, dir)
             .or_else(|| sprites.clip("walk", Dir::Down));
@@ -489,6 +555,19 @@ fn paint_stars(painter: &Painter, sprite: Rect, s: f32, now: f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hop_reaches_its_height_and_lands() {
+        let g = 9.81 * PIXELS_PER_METER;
+        let h = 8.0;
+        let hop = Hop {
+            start: 0.0,
+            v0: (2.0 * g * h).sqrt(),
+        };
+        let top = (hop.v0 / g) as f64;
+        assert!((hop.height(top, g) - h).abs() < 1e-3);
+        assert!(hop.height(2.0 * top + 0.01, g) < 0.0);
+    }
 
     #[test]
     fn every_gait_occurs() {

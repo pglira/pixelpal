@@ -62,8 +62,18 @@ pub struct Clip {
     pub sequences: HashMap<String, Sequence>,
 }
 
+/// The ground shadow of Link in one direction.
+pub struct Shadow {
+    pub texture: TextureHandle,
+    /// Size in sprite pixels.
+    pub size: Vec2,
+    /// Position of Link's coordinate point, on the ground, inside the shadow.
+    pub origin: Vec2,
+}
+
 pub struct Sprites {
     clips: HashMap<(String, Dir), Clip>,
+    shadows: HashMap<Dir, Shadow>,
     /// Distance from Link's coordinate point down to his feet, in sprite pixels.
     pub feet: f32,
 }
@@ -71,6 +81,16 @@ pub struct Sprites {
 #[derive(Deserialize)]
 struct IndexJson {
     animations: HashMap<String, AnimJson>,
+    #[serde(default)]
+    shadows: HashMap<String, ShadowJson>,
+}
+
+#[derive(Deserialize)]
+struct ShadowJson {
+    file: String,
+    frame_width: u32,
+    frame_height: u32,
+    origin: [f32; 2],
 }
 
 #[derive(Deserialize)]
@@ -103,7 +123,8 @@ impl Sprites {
     pub fn load(ctx: &Context) -> Self {
         let mut clips = HashMap::new();
         let mut textures: HashMap<String, Vec<TextureHandle>> = HashMap::new();
-        for (name, anim) in index().animations {
+        let index = index();
+        for (name, anim) in index.animations {
             for (dir, d) in anim.directions {
                 let Some(dir) = Dir::parse(&dir) else {
                     continue;
@@ -148,11 +169,40 @@ impl Sprites {
         let feet = stand_image()
             .and_then(|(img, origin_y)| Some(bottom(&img)? as f32 - origin_y))
             .unwrap_or(23.0);
-        Self { clips, feet }
+        let shadows = index
+            .shadows
+            .into_iter()
+            .filter_map(|(dir, s)| {
+                let img = strip_image(&s.file)?;
+                let color = ColorImage::from_rgba_unmultiplied(
+                    [img.width() as usize, img.height() as usize],
+                    img.as_raw(),
+                );
+                Some((
+                    Dir::parse(&dir)?,
+                    Shadow {
+                        texture: ctx.load_texture(&s.file, color, TextureOptions::NEAREST),
+                        size: vec2(s.frame_width as f32, s.frame_height as f32),
+                        origin: vec2(s.origin[0], s.origin[1]),
+                    },
+                ))
+            })
+            .collect();
+        Self {
+            clips,
+            shadows,
+            feet,
+        }
     }
 
     pub fn clip(&self, anim: &str, dir: Dir) -> Option<&Clip> {
         self.clips.get(&(anim.to_owned(), dir))
+    }
+
+    /// The ground shadow for direction `dir`. Animations extracted without
+    /// shadows give `None`.
+    pub fn shadow(&self, dir: Dir) -> Option<&Shadow> {
+        self.shadows.get(&dir)
     }
 }
 
@@ -210,4 +260,18 @@ pub fn icon(size: u32) -> (u32, u32, Vec<u8>) {
         }
     }
     (size, size, canvas.into_raw())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_direction_has_a_shadow() {
+        let sprites = Sprites::load(&Context::default());
+        for dir in [Dir::Up, Dir::Down, Dir::Left, Dir::Right] {
+            let s = sprites.shadow(dir).expect("shadow");
+            assert!(s.size.x > 0.0 && s.size.y > 0.0);
+        }
+    }
 }

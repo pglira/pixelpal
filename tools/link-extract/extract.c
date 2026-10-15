@@ -7,7 +7,8 @@
 //
 // Usage: extract <out.bin> [sword 0-4] [shield 0-3] [armor 0-2]
 //
-// Output: a header line, then one record per pose:
+// Output: a header line, then one record per pose, then one shadow record
+// per direction with yt = -1:
 //   int32 dir, yt, rt, r2; then POSE_SIZE * POSE_SIZE RGBA pixels.
 // Link's position (link_x_coord, link_y_coord) is at pixel (ORIGIN, ORIGIN).
 
@@ -183,6 +184,20 @@ static void DrawPose(int dir, int yt, int rt, bool want_sword) {
   }
 }
 
+// The ground shadow of Link, as the shadow part of LinkOam_Main() draws it:
+// two 8x8 tiles, the second one mirrored.
+static void DrawShadow(int dir) {
+  uint8 oam_x = SCREEN_POS + kOffsToShadowGivenDir_X[dir];
+  uint8 oam_y = SCREEN_POS + kOffsToShadowGivenDir_Y[dir];
+  uint16 td = kLinkShadows_Chardata[0] & ~0x3000 | 0x2000;
+  WORD(oam_buf[0].charnum) = td;
+  WORD(oam_buf[1].charnum) = td & ~0xC000 | 0x4000;
+  WORD(oam_buf[0].x) = oam_x | oam_y << 8;
+  WORD(oam_buf[1].x) = (uint8)(oam_x + 8) | oam_y << 8;
+  bytewise_extended_oam[0] = 0;
+  bytewise_extended_oam[1] = 0;
+}
+
 static uint32 Bgr555ToRgba(uint16 c) {
   uint32 r = (c & 31) * 255 / 31, g = (c >> 5 & 31) * 255 / 31, b = (c >> 10 & 31) * 255 / 31;
   return r | g << 8 | b << 16 | 0xffu << 24;
@@ -260,6 +275,10 @@ int main(int argc, char **argv) {
   // Some loaders write only the auxiliary buffer, which the game copies to
   // the main buffer when the screen fades in.
   memcpy(&main_palette_buffer[128], &aux_palette_buffer[128], 128 * sizeof(uint16));
+  // The common sprites hold the tiles of the shadow. Pack 10 is the set that
+  // the dungeons use.
+  misc_sprites_graphics_index = 10;
+  LoadCommonSprites();
 
   FILE *f = fopen(argv[1], "wb");
   if (!f) {
@@ -300,6 +319,18 @@ int main(int argc, char **argv) {
         fwrite(pixels, sizeof(pixels), 1, f);
       }
     }
+  }
+
+  // One shadow record per direction, with the animation type -1.
+  for (int dir = 0; dir < 4; dir++) {
+    for (int i = 0; i < 128; i++)
+      oam_buf[i].y = 0xf0;
+    memset(bytewise_extended_oam, 0, 128);
+    DrawShadow(dir);
+    RenderOam(pixels);
+    int32_t hdr[4] = { dir, -1, 0, -1 };
+    fwrite(hdr, sizeof(hdr), 1, f);
+    fwrite(pixels, sizeof(pixels), 1, f);
   }
   fclose(f);
   return 0;

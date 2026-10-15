@@ -49,6 +49,8 @@ pub struct Config {
     pub action_chance: f32,
     /// Gives each walk a random gait: stroll, walk, hurry or dash.
     pub vary_speed: bool,
+    /// Lets the pal hop at random moments of a walk.
+    pub hops: bool,
     /// Walk speed in points per second.
     pub walk_speed: f32,
     /// Pause between two walks, in seconds.
@@ -84,6 +86,7 @@ impl Default for Config {
             actions: true,
             action_chance: 0.5,
             vary_speed: true,
+            hops: true,
             walk_speed: 40.0,
             pause_min: 3.0,
             pause_max: 10.0,
@@ -254,6 +257,10 @@ impl SettingsUi {
                 ui.label("Vary the walk speed")
                     .on_hover_text("Each walk is a stroll (½×), a walk (1×), a hurry (1.7×) or a Pegasus dash (3.5×).");
                 ui.checkbox(&mut cfg.vary_speed, "");
+                ui.end_row();
+                ui.label("Hop while walking")
+                    .on_hover_text("Link hops at random moments of a walk. His shadow stays on the ground.");
+                ui.checkbox(&mut cfg.hops, "");
                 ui.end_row();
                 ui.label("Pause between walks");
                 ui.horizontal(|ui| {

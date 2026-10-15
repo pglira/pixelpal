@@ -36,6 +36,9 @@ shield) and armor 0-2 (0 = green mail).
   list of `[frame index, duration]` pairs. The durations are in game frames at
   60 fps; a duration of 0 means that the game holds the frame until an event.
   `same_as` marks a direction that uses the strip of another direction.
+- `shadow_<direction>.png`: the ground shadow of Link, as the game draws it
+  below him. `animations.json` lists it under `shadows`, with its origin: the
+  position of Link's coordinate point when he stands on the ground.
 - `preview.png`: an overview of all strips with their names.
 
 The sequences come from the timer tables and state handlers in zelda3's
