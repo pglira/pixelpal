@@ -158,6 +158,9 @@ const CHASE_SPEED: f32 = 2.2;
 const CHASE_RANGE: (f32, f32) = (24.0, 160.0);
 /// Horizontal distance at which Link catches the pointer, in sprite pixels.
 const CATCH_DISTANCE: f32 = 14.0;
+/// The Zzz of a sleeping Link run this many times slower than in the game,
+/// which suits a pal that sleeps for a long time.
+const ZZZ_SLOWDOWN: f64 = 2.5;
 /// Animations whose poses lie on the ground.
 const LYING: &[&str] = &["sleep_in_bed"];
 /// Tint of the sprites during the night.
@@ -290,10 +293,10 @@ impl Pal {
             }
             Motion::Stand { until } if self.hop.is_some() => FRAME.min(until - now),
             Motion::Stand { until } => until - now,
-            // The Zzz rise half a sprite pixel per game frame. After a long
-            // absence, they slow down to save power.
+            // The Zzz rise two sprite pixels in four of their slow frames.
+            // After a long absence, they slow down to save power.
             Motion::Sleep if idle.is_some_and(|d| d.as_secs() >= 30 * 60) => 1.0,
-            Motion::Sleep => 4.0 * FRAME,
+            Motion::Sleep => 4.0 * FRAME * ZZZ_SLOWDOWN,
         };
         match self.mood {
             // The dots of the bubble change three times per second.
@@ -763,12 +766,13 @@ impl Pal {
     }
 }
 
-/// The Zzz of a sleeping Link, as `Ancilla21_Snore` of the game draws them: a
-/// new Zzz every 32 game frames, rising 0.5 pixels per frame from beside his
-/// head and swaying, for 56 frames. All Zzz show the frame of the newest one,
-/// which grows from small to large in 16 frames.
+/// The Zzz of a sleeping Link, as `Ancilla21_Snore` of the game draws them,
+/// slowed down by `ZZZ_SLOWDOWN`: a new Zzz every 32 slow frames, rising 0.5
+/// pixels per frame from beside his head and swaying, for 56 frames. All Zzz
+/// show the frame of the newest one, which grows from small to large in 16
+/// frames.
 fn paint_zzz(draw: &impl Fn(&Clip, usize, Pos2), zzz: &Clip, origin: Pos2, scale: f32, now: f64) {
-    let frames = now * 60.0;
+    let frames = now * 60.0 / ZZZ_SLOWDOWN;
     let newest = (frames % 32.0) as f32;
     let frame = ((newest / 8.0) as usize).min(zzz.frames - 1);
     for age in [newest, newest + 32.0] {
