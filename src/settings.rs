@@ -43,6 +43,10 @@ const READ_ONLY_TOOLS: [&str; 5] = ["Read", "Grep", "Glob", "WebSearch", "WebFet
 #[serde(default)]
 pub struct Config {
     pub walk: bool,
+    /// Plays random actions of the game between the walks.
+    pub actions: bool,
+    /// Probability that an action follows a pause instead of a walk, 0 to 1.
+    pub action_chance: f32,
     /// Walk speed in points per second.
     pub walk_speed: f32,
     /// Pause between two walks, in seconds.
@@ -75,6 +79,8 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             walk: true,
+            actions: true,
+            action_chance: 0.5,
             walk_speed: 40.0,
             pause_min: 3.0,
             pause_max: 10.0,
@@ -226,6 +232,18 @@ impl SettingsUi {
             egui::Grid::new("movement").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
                 ui.label("Walk on the desktop");
                 ui.checkbox(&mut cfg.walk, "");
+                ui.end_row();
+                ui.label("Play actions")
+                    .on_hover_text("Sword, spin attack, swimming, items and more from the game, between the walks.");
+                ui.checkbox(&mut cfg.actions, "");
+                ui.end_row();
+                ui.label("Action chance")
+                    .on_hover_text("Probability that an action follows a pause instead of a walk.");
+                ui.add_enabled(
+                    cfg.actions,
+                    egui::Slider::new(&mut cfg.action_chance, 0.0..=1.0)
+                        .custom_formatter(|v, _| format!("{:.0} %", v * 100.0)),
+                );
                 ui.end_row();
                 ui.label("Walk speed");
                 ui.add(DragValue::new(&mut cfg.walk_speed).range(5.0..=400.0).suffix(" px/s"));

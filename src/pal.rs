@@ -4,13 +4,18 @@ use std::f32::consts::TAU;
 
 use egui::{Color32, Painter, Pos2, Rect, Stroke, Vec2, pos2, vec2};
 
-use crate::link::{Frame, Sprites};
+use crate::actions::{self, ACTIONS, Shot, Then};
+use crate::link::{Dir, Sprites};
 use crate::settings::Config;
 
-/// Size of the pal window in sheet pixels. The top part holds the speech bubble.
-pub const CANVAS: Vec2 = vec2(28.0, 42.0);
+/// Size of the pal window in sprite pixels. Link stands at the bottom center.
+/// The space around him holds the swords and items of the actions, and the
+/// speech bubble.
+pub const CANVAS: Vec2 = vec2(52.0, 46.0);
+/// Width of Link's body box, in sprite pixels. His origin is its left edge.
+const BODY_WIDTH: f32 = 16.0;
 
-/// Sheet pixels per meter. Link is about 24 sheet pixels (1.5 m) tall.
+/// Sprite pixels per meter. Link is about 24 sprite pixels (1.5 m) tall.
 const PIXELS_PER_METER: f32 = 16.0;
 /// Duration of the happy animation, in seconds.
 const HAPPY_SECONDS: f64 = 1.6;
@@ -26,12 +31,24 @@ pub struct Area {
     pub bottom: f32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum Motion {
-    Stand { until: f64 },
-    Walk { target: f32 },
-    Fall { vy: f32 },
+    Stand {
+        until: f64,
+    },
+    Walk {
+        target: f32,
+    },
+    Fall {
+        vy: f32,
+    },
     Held,
+    /// An action from `actions::ACTIONS`.
+    Act {
+        shots: Vec<Shot>,
+        start: f64,
+        then: Then,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -46,7 +63,7 @@ pub struct Pal {
     pub pos: Pos2,
     motion: Motion,
     pub mood: Mood,
-    facing_right: bool,
+    facing: Dir,
     /// Distance of the current walk, in points.
     walk_distance: f32,
 }
@@ -57,7 +74,7 @@ impl Pal {
             pos,
             motion: Motion::Fall { vy: 0.0 },
             mood: Mood::Calm,
-            facing_right: false,
+            facing: Dir::Down,
             walk_distance: 0.0,
         }
     }
@@ -67,10 +84,7 @@ impl Pal {
     }
 
     pub fn is_moving(&self) -> bool {
-        matches!(
-            self.motion,
-            Motion::Walk { .. } | Motion::Fall { .. } | Motion::Held
-        )
+        !matches!(self.motion, Motion::Stand { .. })
     }
 
     pub fn hold(&mut self) {
@@ -90,13 +104,27 @@ impl Pal {
     }
 
     pub fn celebrate(&mut self, now: f64) {
+        if matches!(self.motion, Motion::Act { .. }) {
+            self.motion = Motion::Stand {
+                until: now + HAPPY_SECONDS,
+            };
+        }
         self.mood = Mood::Happy {
             until: now + HAPPY_SECONDS,
         };
     }
 
-    /// Advances the behavior by `dt` seconds. `may_walk` is false while the pal must stay.
-    pub fn update(&mut self, now: f64, dt: f32, area: Area, cfg: &Config, may_walk: bool) {
+    /// Advances the behavior by `dt` seconds. `may_move` is false while the pal
+    /// must stay calm: then no walk and no action starts.
+    pub fn update(
+        &mut self,
+        now: f64,
+        dt: f32,
+        area: Area,
+        cfg: &Config,
+        sprites: &Sprites,
+        may_move: bool,
+    ) {
         let size = Self::window_size(cfg.scale);
         let ground = area.bottom - size.y - cfg.bottom_margin;
         let min_x = area.left;
@@ -125,13 +153,31 @@ impl Pal {
             }
             Motion::Stand { until } => {
                 self.walk_distance = 0.0;
-                if may_walk && now >= until {
-                    let margin = size.x;
-                    let lo = min_x + margin;
-                    let hi = (max_x - margin).max(lo);
-                    let target = lo + fastrand::f32() * (hi - lo);
-                    if (target - self.pos.x).abs() >= MIN_WALK {
-                        self.motion = Motion::Walk { target };
+                if may_move && now >= until {
+                    let calm = self.mood == Mood::Calm;
+                    if calm && cfg.actions && fastrand::f32() < cfg.action_chance {
+                        self.start_action(now, sprites);
+                    } else if cfg.walk {
+                        self.start_walk(now, cfg, min_x, max_x, size.x);
+                    } else {
+                        self.motion = Motion::Stand {
+                            until: now + pause(cfg),
+                        };
+                    }
+                }
+            }
+            Motion::Act {
+                ref shots,
+                start,
+                then,
+            } => {
+                let total: f32 = shots.iter().map(|s| s.secs).sum();
+                if now - start >= total as f64 {
+                    if then == Then::DropFromAbove {
+                        self.pos.x = min_x + fastrand::f32() * (max_x - min_x);
+                        self.pos.y = area.top - size.y;
+                        self.facing = Dir::Down;
+                        self.motion = Motion::Fall { vy: 0.0 };
                     } else {
                         self.motion = Motion::Stand {
                             until: now + pause(cfg),
@@ -140,17 +186,20 @@ impl Pal {
                 }
             }
             Motion::Walk { target } => {
-                if !may_walk {
+                if !may_move || !cfg.walk {
                     self.motion = Motion::Stand {
                         until: now + pause(cfg),
                     };
                 } else {
                     let step = cfg.walk_speed * dt;
                     let d = target - self.pos.x;
-                    self.facing_right = d > 0.0;
+                    self.facing = if d > 0.0 { Dir::Right } else { Dir::Left };
                     self.walk_distance += step.min(d.abs());
                     if d.abs() <= step {
                         self.pos.x = target;
+                        if fastrand::bool() {
+                            self.facing = Dir::Down;
+                        }
                         self.motion = Motion::Stand {
                             until: now + pause(cfg),
                         };
@@ -161,7 +210,8 @@ impl Pal {
             }
         }
 
-        // Keep the pal inside the area and on the ground.
+        // Keep the pal inside the area and on the ground. A drop from above
+        // starts above the area and falls down to the ground.
         self.pos.x = self.pos.x.clamp(min_x, max_x);
         if !matches!(self.motion, Motion::Fall { .. }) {
             if self.pos.y < ground - 0.5 {
@@ -172,30 +222,84 @@ impl Pal {
         }
     }
 
-    /// The frame to draw. `stride` is the walked distance in sheet pixels for
-    /// one frame of the walk cycle, so the walk cycle advances with the distance
-    /// and not with the time.
-    fn frame<'a>(&self, sprites: &'a Sprites, scale: f32, stride: f32) -> &'a Frame {
-        match (self.motion, self.mood) {
-            (Motion::Walk { .. }, _) => {
-                let frames = if self.facing_right {
-                    &sprites.walk_right
-                } else {
-                    &sprites.walk_left
+    /// Starts a random action, or the action that `$PIXELPAL_ACTION` names. If
+    /// the sprites lack a part of the action, the pal stands for one more second.
+    fn start_action(&mut self, now: f64, sprites: &Sprites) {
+        let forced = std::env::var("PIXELPAL_ACTION").ok();
+        let action = forced
+            .and_then(|name| ACTIONS.iter().find(|a| a.name == name))
+            .unwrap_or_else(|| &ACTIONS[fastrand::usize(..ACTIONS.len())]);
+        let dir = actions::pick_dir(action);
+        self.motion = match actions::scene(action, dir, sprites) {
+            Some(shots) if !shots.is_empty() => {
+                self.facing = match dir {
+                    Dir::Left | Dir::Right => dir,
+                    _ => Dir::Down,
                 };
-                let i = (self.walk_distance / (stride.max(0.1) * scale)) as usize % frames.len();
-                &frames[i]
+                Motion::Act {
+                    shots,
+                    start: now,
+                    then: action.then,
+                }
             }
-            (Motion::Held, _) | (_, Mood::Happy { .. }) => &sprites.happy,
-            _ => &sprites.idle,
+            _ => Motion::Stand { until: now + 1.0 },
+        };
+    }
+
+    fn start_walk(&mut self, now: f64, cfg: &Config, min_x: f32, max_x: f32, width: f32) {
+        let lo = min_x + width;
+        let hi = (max_x - width).max(lo);
+        let target = lo + fastrand::f32() * (hi - lo);
+        self.motion = if (target - self.pos.x).abs() >= MIN_WALK {
+            Motion::Walk { target }
+        } else {
+            Motion::Stand {
+                until: now + pause(cfg),
+            }
+        };
+    }
+
+    /// The animation, direction and frame to draw. `stride` is the walked
+    /// distance in sprite pixels for one frame of the walk cycle, so the walk
+    /// cycle advances with the distance and not with the time.
+    fn shot(&self, scale: f32, stride: f32, now: f64) -> (&'static str, Dir, usize) {
+        match (&self.motion, self.mood) {
+            (Motion::Walk { .. }, _) => {
+                // Frames 1 to 8 of the walk strip are the walk cycle; frame 0 is
+                // the standing frame.
+                let i = (self.walk_distance / (stride.max(0.1) * scale)) as usize % 8;
+                ("walk", self.facing, 1 + i)
+            }
+            (Motion::Held | Motion::Fall { .. }, _) => ("recoil", Dir::Down, 0),
+            (_, Mood::Happy { .. }) => ("item_get_two_hands", Dir::Down, 0),
+            (Motion::Act { shots, start, .. }, _) => {
+                let mut t = (now - start) as f32;
+                for s in shots {
+                    if t < s.secs {
+                        return (s.anim, s.dir, s.frame);
+                    }
+                    t -= s.secs;
+                }
+                ("walk", self.facing, 0)
+            }
+            (Motion::Stand { .. }, _) => ("walk", self.facing, 0),
         }
+    }
+
+    /// The body box of Link inside `rect`, the full pal window: 16 sprite
+    /// pixels wide, from the top of his head to his feet.
+    pub fn body(rect: Rect, sprites: &Sprites, scale: f32) -> Rect {
+        let feet = rect.bottom();
+        let left = (rect.center().x - BODY_WIDTH / 2.0 * scale).round();
+        Rect::from_min_max(
+            pos2(left, feet - (sprites.feet + 1.0) * scale),
+            pos2(left + BODY_WIDTH * scale, feet),
+        )
     }
 
     /// Draws the pal into `rect`, the full pal window.
     pub fn paint(&self, painter: &Painter, rect: Rect, sprites: &Sprites, cfg: &Config, now: f64) {
         let scale = cfg.scale as f32;
-        let frame = self.frame(sprites, scale, cfg.walk_stride);
-        let size = frame.size * scale;
         let mut hop = 0.0;
         if let Mood::Happy { until } = self.mood {
             let t = (HAPPY_SECONDS - (until - now)) as f32;
@@ -203,20 +307,29 @@ impl Pal {
                 hop = (t * 2.0 * TAU / 2.0).sin().abs() * 4.0 * scale;
             }
         }
-        let sprite = Rect::from_min_size(
-            pos2(rect.center().x - size.x / 2.0, rect.bottom() - size.y - hop).round(),
-            size,
-        );
-        painter.image(
-            frame.texture.id(),
-            sprite,
-            Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
-            Color32::WHITE,
-        );
+        let body = Self::body(rect, sprites, scale).translate(vec2(0.0, -hop));
+        let origin = pos2(body.left(), body.bottom() - sprites.feet * scale);
+
+        let (anim, dir, frame) = self.shot(scale, cfg.walk_stride, now);
+        let clip = sprites
+            .clip(anim, dir)
+            .or_else(|| sprites.clip("walk", Dir::Down));
+        if let Some(clip) = clip
+            && let Some(texture) = clip.frames.get(frame).or(clip.frames.first())
+        {
+            let sprite =
+                Rect::from_min_size((origin - clip.origin * scale).round(), clip.size * scale);
+            painter.image(
+                texture.id(),
+                sprite,
+                Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
+                Color32::WHITE,
+            );
+        }
 
         match self.mood {
-            Mood::Thinking => paint_bubble(painter, sprite, scale, now),
-            Mood::Happy { .. } => paint_stars(painter, sprite, scale, now),
+            Mood::Thinking => paint_bubble(painter, body, scale, now),
+            Mood::Happy { .. } => paint_stars(painter, body, scale, now),
             Mood::Calm => {}
         }
     }

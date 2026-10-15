@@ -1,7 +1,7 @@
 /target
-# The Link sprite sheet is copyrighted by Nintendo and is never committed.
-/assets/link_sheet.png
-# Animations extracted from the game by tools/link-extract; also Nintendo's.
+# The graphics of Link are copyrighted by Nintendo and are never committed:
+# the animations that tools/link-extract writes, and any sprite sheet.
 /assets/link/
+/assets/link_sheet.png
 # Plan reports for the Galley review app.
 /.galley/

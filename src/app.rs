@@ -583,11 +583,14 @@ impl eframe::App for PalApp {
         }
 
         let rect = ui.max_rect();
-        self.handle_input(ui, rect);
+        // Only Link's body reacts to the mouse, not the empty space around him.
+        let scale = self.cfg.scale as f32;
+        let body = Pal::body(rect, &self.sprites, scale).expand(2.0 * scale);
+        self.handle_input(ui, body);
 
-        let may_walk =
-            self.cfg.walk && !self.panel_open && !self.chat.is_running() && self.menu.is_none();
-        self.pal.update(now, dt, self.area, &self.cfg, may_walk);
+        let may_move = !self.panel_open && !self.chat.is_running() && self.menu.is_none();
+        self.pal
+            .update(now, dt, self.area, &self.cfg, &self.sprites, may_move);
 
         let pos = self.pal.pos.round();
         if self.sent_pos != Some(pos) {

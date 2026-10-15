@@ -6,7 +6,9 @@ A desktop pal for Linux. Link from *The Legend of Zelda: A Link to the Past* wal
 - Left click: open or close the chat panel. Left drag: move the pal (not while the chat panel is open). When you release him, he falls back to the bottom edge.
 - Right click: menu with **Open chat**, **Settings…** and **Quit**.
 - Tray icon: a click opens or closes the chat. Its menu has **Hide pal** / **Show pal**, **Open or close the chat**, **Settings…** and **Quit**.
+- Between the walks, the pal plays random actions from the game: sword swings, the spin attack, swimming, the bow, the hammer, the bug net, the medallions, a fall into a pit (after which he drops from the top of the screen), sleep, and more. The list is `ACTIONS` in `src/actions.rs`.
 - While Claude works, the pal shows a "…" bubble. When the reply is complete, he holds up his arms.
+- Only Link's body reacts to the mouse. The rest of the pal window is empty space for the swords and items of the actions.
 
 ## Requirements
 
@@ -17,18 +19,22 @@ A desktop pal for Linux. Link from *The Legend of Zelda: A Link to the Past* wal
 - GTK 3 development files, for the folder dialog (Debian/Ubuntu: `libgtk-3-dev`).
 - Claude Code (`claude`), logged in.
 
-## Sprite sheet
+## Animations
 
-The sprites of Link belong to Nintendo. The repository does not contain them, and `.gitignore` excludes the sheet. Before you build pixelpal:
+The graphics of Link belong to Nintendo. The repository does not contain them, and `.gitignore` excludes `assets/link/`. You extract them from your own copy of the game with `tools/link-extract`:
 
-1. Download the sheet "Link" of *The Legend of Zelda: A Link to the Past* (SNES, Playable Characters) from The Spriters Resource. The file name is `SNES - The Legend of Zelda_ A Link to the Past - Playable Characters - Link.png` (688 × 365 px).
-2. Copy it to `assets/link_sheet.png`:
+1. Build [zelda3](https://github.com/snesrev/zelda3) with your ROM, as its README describes. This gives `zelda3_assets.dat` and the object files.
+2. Extract the animations into `assets/link/`:
 
    ```sh
-   cp "SNES - The Legend of Zelda_ A Link to the Past - Playable Characters - Link.png" assets/link_sheet.png
+   tools/link-extract/build.sh <zelda3-dir> /tmp/link-extract
+   (cd <zelda3-dir> && /tmp/link-extract /tmp/poses.bin)
+   python3 tools/link-extract/pack.py /tmp/poses.bin assets/link
    ```
 
-The build stops with a message if the file is missing. The binary embeds the sheet, so the installed binary needs no other files. pixelpal supports only this sheet: the frame rectangles are constants in `src/link.rs`.
+See `tools/link-extract/README.md` for the details and the output format. The build of pixelpal stops with a message if `assets/link/animations.json` is missing. The binary embeds the animations, so the installed binary needs no other files.
+
+To see one action again and again, start pixelpal with `PIXELPAL_ACTION=<name>`, for example `PIXELPAL_ACTION=spin_attack cargo run --release`. The names are in `ACTIONS` in `src/actions.rs`.
 
 ## Install
 
@@ -73,6 +79,7 @@ The settings are in the text file `~/.config/pixelpal/config.toml` (TOML). The s
 | Setting | Effect |
 |---|---|
 | Walk on the desktop | Turns the walking on or off. |
+| Play actions, action chance | Turns the random actions on or off, and sets the probability that an action follows a pause instead of a walk (default 50 %). |
 | Walk speed, pause between walks | Speed in px/s, and the random pause in seconds. |
 | Walk distance per frame | Distance in sprite pixels for one frame of the walk cycle. Larger values give slower steps at the same walk speed. |
 | Scale | Size of the pal: 2×, 3× or 4×. |
@@ -101,8 +108,11 @@ The settings are in the text file `~/.config/pixelpal/config.toml` (TOML). The s
 |---|---|
 | `src/main.rs` | Start position and window setup |
 | `src/app.rs` | The egui application: pal window, chat panel, menu, settings window |
-| `src/pal.rs` | Walking, falling, animation states, speech bubble and stars |
-| `src/link.rs` | Frame rectangles of the sheet and color keying |
+| `src/pal.rs` | Walking, falling, actions, animation states, speech bubble and stars |
+| `src/actions.rs` | The random actions, built from the playback sequences of the game |
+| `src/link.rs` | Loading of the embedded animations (`assets/link/`) |
+| `build.rs` | Embeds the files of `assets/link/` |
+| `tools/link-extract/` | Extraction of the animations from the game |
 | `src/workarea.rs` | Usable screen area, pointer position and window states from X11 |
 | `src/theme.rs` | Colors and font of the chat panel |
 | `src/tray.rs` | Tray icon (StatusNotifierItem) and its menu |

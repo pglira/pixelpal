@@ -1,6 +1,7 @@
 //! pixelpal: a desktop pal that walks along the bottom of the screen and chats
 //! through the Claude Code CLI.
 
+mod actions;
 mod app;
 mod chat;
 mod claude;
