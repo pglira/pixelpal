@@ -9,7 +9,7 @@ license = "MIT"
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 dirs = "7.0.0"
-eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow", "x11"] }
+eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow", "links", "x11"] }
 egui = "0.36.2"
 egui_commonmark = "0.25.0"
 fastrand = "2.5.0"
