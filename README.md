@@ -76,6 +76,7 @@ The settings are in the text file `~/.config/pixelpal/config.toml` (TOML). The s
 | Walk speed, pause between walks | Speed in px/s, and the random pause in seconds. |
 | Walk distance per frame | Distance in sprite pixels for one frame of the walk cycle. Larger values give slower steps at the same walk speed. |
 | Scale | Size of the pal: 2×, 3× or 4×. |
+| Gravity | Acceleration of a fall after a drag, in m/s² (default 9.81). 16 sprite pixels count as 1 m. |
 | Bottom margin | Extra distance between the pal and the bottom of the usable screen area. |
 | claude binary | Path of `claude`. Default: `claude` from `PATH`. |
 | Working directory | Directory in which `claude` runs. Empty: the home directory. |

@@ -54,6 +54,8 @@ pub struct Config {
     pub bottom_margin: f32,
     /// Walked distance in sheet pixels for one frame of the walk cycle.
     pub walk_stride: f32,
+    /// Gravity of a fall after a drag, in m/s². 16 sheet pixels are 1 m.
+    pub gravity: f32,
     pub claude_path: String,
     /// Working directory of `claude`. Empty means the home directory.
     pub working_dir: String,
@@ -79,6 +81,7 @@ impl Default for Config {
             scale: 3,
             bottom_margin: 0.0,
             walk_stride: 2.5,
+            gravity: 9.81,
             claude_path: "claude".into(),
             working_dir: String::new(),
             permission: Permission::ChatOnly,
@@ -244,6 +247,10 @@ impl SettingsUi {
                 ui.label("Walk distance per frame")
                     .on_hover_text("Larger values give slower steps for the same walk speed.");
                 ui.add(DragValue::new(&mut cfg.walk_stride).range(0.5..=10.0).speed(0.05).suffix(" px"));
+                ui.end_row();
+                ui.label("Gravity")
+                    .on_hover_text("Acceleration of a fall after a drag. 9.81 m/s² is the gravity of the earth.");
+                ui.add(DragValue::new(&mut cfg.gravity).range(0.5..=100.0).speed(0.1).suffix(" m/s²"));
                 ui.end_row();
                 ui.label("Bottom margin");
                 ui.add(DragValue::new(&mut cfg.bottom_margin).range(0.0..=500.0).suffix(" px"));

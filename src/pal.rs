@@ -10,8 +10,8 @@ use crate::settings::Config;
 /// Size of the pal window in sheet pixels. The top part holds the speech bubble.
 pub const CANVAS: Vec2 = vec2(28.0, 42.0);
 
-/// Gravity after a drag, in points per second squared.
-const GRAVITY: f32 = 2400.0;
+/// Sheet pixels per meter. Link is about 24 sheet pixels (1.5 m) tall.
+const PIXELS_PER_METER: f32 = 16.0;
 /// Duration of the happy animation, in seconds.
 const HAPPY_SECONDS: f64 = 1.6;
 /// Smallest walk distance, in points.
@@ -111,7 +111,8 @@ impl Pal {
         match self.motion {
             Motion::Held => return,
             Motion::Fall { vy } => {
-                let vy = vy + GRAVITY * dt;
+                let gravity = cfg.gravity * PIXELS_PER_METER * cfg.scale as f32;
+                let vy = vy + gravity * dt;
                 self.pos.y += vy * dt;
                 if self.pos.y >= ground {
                     self.pos.y = ground;
