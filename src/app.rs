@@ -213,6 +213,9 @@ impl PalApp {
                 self.pal.release();
             }
         }
+        if resp.clicked_by(PointerButton::Middle) {
+            self.pal.poke(ctx.input(|i| i.time), &self.sprites);
+        }
         if resp.clicked_by(PointerButton::Primary) {
             self.menu = None;
             self.panel_open = !self.panel_open;

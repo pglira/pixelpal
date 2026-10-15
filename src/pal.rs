@@ -229,6 +229,26 @@ impl Pal {
         let action = forced
             .and_then(|name| ACTIONS.iter().find(|a| a.name == name))
             .unwrap_or_else(|| &ACTIONS[fastrand::usize(..ACTIONS.len())]);
+        self.play(action, now, sprites);
+    }
+
+    /// Reacts to a poke with a random action from `actions::REACTIONS`, at
+    /// once and also while the chat panel is open. A held or falling pal does
+    /// not react.
+    pub fn poke(&mut self, now: f64, sprites: &Sprites) {
+        if matches!(self.motion, Motion::Held | Motion::Fall { .. }) {
+            return;
+        }
+        let name = actions::REACTIONS[fastrand::usize(..actions::REACTIONS.len())];
+        if let Some(action) = ACTIONS.iter().find(|a| a.name == name) {
+            if matches!(self.mood, Mood::Happy { .. }) {
+                self.mood = Mood::Calm;
+            }
+            self.play(action, now, sprites);
+        }
+    }
+
+    fn play(&mut self, action: &actions::Action, now: f64, sprites: &Sprites) {
         let dir = actions::pick_dir(action);
         self.motion = match actions::scene(action, dir, sprites) {
             Some(shots) if !shots.is_empty() => {

@@ -62,6 +62,10 @@ const fn action(name: &'static str, dirs: &'static [Dir], parts: &'static [Part]
     }
 }
 
+/// Names of the actions that answer a middle click on the pal. None of them
+/// moves the pal away.
+pub const REACTIONS: &[&str] = &["electrocuted", "spin_attack", "swoon", "sword"];
+
 #[rustfmt::skip]
 pub const ACTIONS: &[Action] = &[
     action("sword", SIDES, &[
@@ -207,6 +211,16 @@ mod tests {
                     action.name
                 );
             }
+        }
+    }
+
+    #[test]
+    fn every_reaction_is_an_action() {
+        for name in REACTIONS {
+            assert!(
+                ACTIONS.iter().any(|a| a.name == *name),
+                "unknown reaction {name}"
+            );
         }
     }
 }

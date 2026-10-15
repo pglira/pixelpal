@@ -4,6 +4,7 @@ A desktop pal for Linux. Link from *The Legend of Zelda: A Link to the Past* wal
 
 - The pal is always on top of the other windows and on all desktops. It has no taskbar entry.
 - Left click: open or close the chat panel. Left drag: move the pal (not while the chat panel is open). When you release him, he falls back to the bottom edge.
+- Middle click: poke Link. He reacts at once with an electric shock, a spin attack, a swoon or sword swings (`REACTIONS` in `src/actions.rs`).
 - Right click: menu with **Open chat**, **Settings…** and **Quit**.
 - Tray icon: a click opens or closes the chat. Its menu has **Hide pal** / **Show pal**, **Open or close the chat**, **Settings…** and **Quit**.
 - Between the walks, the pal plays random actions from the game: sword swings, the spin attack, swimming, the bow, the hammer, the bug net, the medallions, a fall into a pit (after which he drops from the top of the screen), sleep, and more. The list is `ACTIONS` in `src/actions.rs`.
