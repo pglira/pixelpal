@@ -58,6 +58,7 @@ To start pixelpal at login, enable **Start pixelpal at login** in the settings. 
 
 Each prompt starts `claude -p` with `--output-format stream-json`. The reply streams into the panel. The first reply gives a session id. The next prompts use `--resume <session id>`, so the conversation keeps its context.
 
+- Drag the top edge, a side edge or a top corner of the panel to resize it. The panel stays centered above the pal. The new size is saved at once.
 - **Enter** sends the prompt. **Shift+Enter** adds a new line. **Esc** closes the panel.
 - **Stop** kills the running `claude` process.
 - **New chat** starts a new conversation.
@@ -80,7 +81,7 @@ The settings are in the text file `~/.config/pixelpal/config.toml` (TOML). The s
 | Working directory | Directory in which `claude` runs. Empty: the home directory. |
 | Permissions | See below. |
 | Models | Entries of the model selector. |
-| Chat panel width and height | Size of the chat panel. |
+| Chat panel width and height | Size of the chat panel. A resize with the mouse changes these values too. |
 | Theme | Dark or light preset, colors (background, text, input background, your messages, accent), background opacity, font size, and a TTF/OTF font file. |
 
 `claude -p` cannot ask for a permission interactively. The permission presets set the tools of Claude:
