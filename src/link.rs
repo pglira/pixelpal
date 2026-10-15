@@ -79,6 +79,9 @@ pub struct Clip {
     /// top-left corner of the object. In sprite pixels.
     pub origin: Vec2,
     pub sequences: HashMap<String, Sequence>,
+    /// For each frame, the row below its lowest opaque pixel, in sprite
+    /// pixels from the top of the frame.
+    pub bottoms: Vec<f32>,
 }
 
 pub struct Sprites {
@@ -145,7 +148,7 @@ fn strip_image(tier: usize, file: &str) -> Option<RgbaImage> {
 struct Loader<'a> {
     ctx: &'a Context,
     tier: usize,
-    textures: HashMap<String, TextureHandle>,
+    textures: HashMap<String, (TextureHandle, Vec<f32>)>,
 }
 
 impl Loader<'_> {
@@ -153,16 +156,31 @@ impl Loader<'_> {
         let file = s.file()?.clone();
         if !self.textures.contains_key(&file) {
             let img = strip_image(self.tier, &file)?;
+            let bottoms = (0..s.frames.max(1) as u32)
+                .map(|i| {
+                    let frame = image::imageops::crop_imm(
+                        &img,
+                        i * s.frame_width,
+                        0,
+                        s.frame_width,
+                        s.frame_height,
+                    )
+                    .to_image();
+                    bottom(&frame).unwrap_or(s.frame_height) as f32
+                })
+                .collect();
             let color = ColorImage::from_rgba_unmultiplied(
                 [img.width() as usize, img.height() as usize],
                 img.as_raw(),
             );
             let name = format!("tier{}/{file}", self.tier);
             let texture = self.ctx.load_texture(name, color, TextureOptions::NEAREST);
-            self.textures.insert(file.clone(), texture);
+            self.textures.insert(file.clone(), (texture, bottoms));
         }
+        let (texture, bottoms) = &self.textures[&file];
         Some(Clip {
-            texture: self.textures[&file].clone(),
+            texture: texture.clone(),
+            bottoms: bottoms.clone(),
             frames: s.frames.max(1),
             size: vec2(s.frame_width as f32, s.frame_height as f32),
             origin: vec2(s.origin[0], s.origin[1]),
@@ -212,6 +230,16 @@ impl Sprites {
             extras,
             feet,
         }
+    }
+
+    /// The names of all animations, each with its directions.
+    #[cfg(test)]
+    pub fn clip_names(&self) -> HashMap<String, Vec<Dir>> {
+        let mut names: HashMap<String, Vec<Dir>> = HashMap::new();
+        for (name, dir) in self.clips.keys() {
+            names.entry(name.clone()).or_default().push(*dir);
+        }
+        names
     }
 
     pub fn clip(&self, anim: &str, dir: Dir) -> Option<&Clip> {

@@ -158,6 +158,8 @@ const CHASE_SPEED: f32 = 2.2;
 const CHASE_RANGE: (f32, f32) = (24.0, 160.0);
 /// Horizontal distance at which Link catches the pointer, in sprite pixels.
 const CATCH_DISTANCE: f32 = 14.0;
+/// Animations whose poses lie on the ground.
+const LYING: &[&str] = &["sleep_in_bed"];
 /// Tint of the sprites during the night.
 const NIGHT_TINT: Color32 = Color32::from_rgb(160, 170, 235);
 
@@ -700,9 +702,18 @@ impl Pal {
         }
         let ground = Self::body(rect, sprites, scale);
         let body = ground.translate(vec2(0.0, -hop));
-        let origin = pos2(body.left(), body.bottom() - sprites.feet * scale);
+        let mut origin = pos2(body.left(), body.bottom() - sprites.feet * scale);
 
         let shot = self.shot(scale, cfg.walk_stride, now);
+        // In the game, a lying Link rests in a bed, which is a background tile.
+        // Without the bed, his pose moves down onto the ground.
+        if LYING.contains(&shot.anim)
+            && let Some(clip) = sprites.clip(shot.anim, shot.dir)
+            && let Some(&bottom) = clip.bottoms.get(shot.frame)
+        {
+            let gap = sprites.feet - (bottom - clip.origin.y);
+            origin.y += gap.max(0.0) * scale;
+        }
         let tint = if self.night {
             NIGHT_TINT
         } else {
@@ -834,6 +845,24 @@ fn paint_stars(painter: &Painter, sprite: Rect, s: f32, now: f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_pose_floats_above_the_ground() {
+        let sprites = Sprites::load(&egui::Context::default(), 0);
+        for (anim, dirs) in sprites.clip_names() {
+            // Link shrinks into the hole of a pit; lying poses move down.
+            if anim == "fall_in_pit" || LYING.contains(&anim.as_str()) {
+                continue;
+            }
+            for dir in dirs {
+                let clip = sprites.clip(&anim, dir).unwrap();
+                for (i, &bottom) in clip.bottoms.iter().enumerate() {
+                    let gap = sprites.feet - (bottom - clip.origin.y);
+                    assert!(gap <= 3.0, "{anim} {dir:?} frame {i} floats {gap} px");
+                }
+            }
+        }
+    }
 
     #[test]
     fn hop_reaches_its_height_and_lands() {
