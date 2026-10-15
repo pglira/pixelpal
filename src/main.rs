@@ -9,6 +9,7 @@ mod files;
 mod history;
 mod link;
 mod pal;
+mod picker;
 mod progress;
 mod settings;
 mod theme;

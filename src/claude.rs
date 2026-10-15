@@ -90,9 +90,16 @@ impl Run {
         let stopped = Arc::new(Mutex::new(false));
         let (child2, stopped2) = (child.clone(), stopped.clone());
         thread::spawn(move || {
+            // Streamed text arrives in many small parts; a short delay lets
+            // several of them share one repaint.
             let send = |e: Event| {
+                let text = matches!(e, Event::Text(_));
                 let _ = tx.send(e);
-                ctx.request_repaint();
+                if text {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(50));
+                } else {
+                    ctx.request_repaint();
+                }
             };
             let mut parser = Parser::default();
             // Read raw lines, so that invalid UTF-8 cannot stop the reading.

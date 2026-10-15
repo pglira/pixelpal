@@ -68,7 +68,10 @@ pub struct Sequence {
 
 /// One animation in one direction, or one extra strip.
 pub struct Clip {
-    pub frames: Vec<TextureHandle>,
+    /// The whole strip: the frames side by side.
+    pub texture: TextureHandle,
+    /// Number of frames.
+    pub frames: usize,
     /// Size of each frame, in sprite pixels.
     pub size: Vec2,
     /// For an animation: position of Link's coordinate point inside a frame.
@@ -142,7 +145,7 @@ fn strip_image(tier: usize, file: &str) -> Option<RgbaImage> {
 struct Loader<'a> {
     ctx: &'a Context,
     tier: usize,
-    textures: HashMap<String, Vec<TextureHandle>>,
+    textures: HashMap<String, TextureHandle>,
 }
 
 impl Loader<'_> {
@@ -150,28 +153,17 @@ impl Loader<'_> {
         let file = s.file()?.clone();
         if !self.textures.contains_key(&file) {
             let img = strip_image(self.tier, &file)?;
-            let frames = (0..s.frames as u32)
-                .map(|i| {
-                    let f = image::imageops::crop_imm(
-                        &img,
-                        i * s.frame_width,
-                        0,
-                        s.frame_width,
-                        s.frame_height,
-                    )
-                    .to_image();
-                    let color = ColorImage::from_rgba_unmultiplied(
-                        [f.width() as usize, f.height() as usize],
-                        f.as_raw(),
-                    );
-                    let name = format!("tier{}/{file}#{i}", self.tier);
-                    self.ctx.load_texture(name, color, TextureOptions::NEAREST)
-                })
-                .collect();
-            self.textures.insert(file.clone(), frames);
+            let color = ColorImage::from_rgba_unmultiplied(
+                [img.width() as usize, img.height() as usize],
+                img.as_raw(),
+            );
+            let name = format!("tier{}/{file}", self.tier);
+            let texture = self.ctx.load_texture(name, color, TextureOptions::NEAREST);
+            self.textures.insert(file.clone(), texture);
         }
         Some(Clip {
-            frames: self.textures[&file].clone(),
+            texture: self.textures[&file].clone(),
+            frames: s.frames.max(1),
             size: vec2(s.frame_width as f32, s.frame_height as f32),
             origin: vec2(s.origin[0], s.origin[1]),
             sequences: s.sequences,

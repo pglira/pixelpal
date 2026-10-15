@@ -201,11 +201,11 @@ impl Builder<'_> {
         prop: Option<Prop>,
     ) -> Option<()> {
         let clip = self.sprites.clip(anim, self.dir)?;
-        if frame >= clip.frames.len() {
+        if frame >= clip.frames {
             return None;
         }
         if let Some(p) = prop
-            && p.frame >= self.sprites.extra(p.extra)?.frames.len()
+            && p.frame >= self.sprites.extra(p.extra)?.frames
         {
             return None;
         }
@@ -383,7 +383,7 @@ pub fn scene(action: &Action, dir: Dir, sprites: &Sprites) -> Option<Vec<Shot>> 
         match *part {
             Pose(anim, frame, secs) => {
                 let clip = sprites.clip(anim, dir)?;
-                if frame >= clip.frames.len() {
+                if frame >= clip.frames {
                     return None;
                 }
                 shots.push(Shot {
@@ -398,7 +398,7 @@ pub fn scene(action: &Action, dir: Dir, sprites: &Sprites) -> Option<Vec<Shot>> 
                 let clip = sprites.clip(anim, dir)?;
                 let name = if seq == BY_DIR { dir.name() } else { seq };
                 let s = clip.sequences.get(name)?;
-                if s.frames.is_empty() || s.frames.iter().any(|&(f, _)| f >= clip.frames.len()) {
+                if s.frames.is_empty() || s.frames.iter().any(|&(f, _)| f >= clip.frames) {
                     return None;
                 }
                 let shot = |&(frame, d): &(usize, u32)| Shot {

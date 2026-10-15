@@ -4,6 +4,9 @@
 //!
 //! All values are in physical pixels of the X11 screen.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use x11rb::connection::Connection;
 use x11rb::protocol::randr::ConnectionExt as _;
 use x11rb::protocol::screensaver::ConnectionExt as _;
@@ -43,18 +46,84 @@ impl PxRect {
 pub struct X11 {
     conn: RustConnection,
     root: Window,
+    /// Interned atoms by name.
+    atoms: RefCell<HashMap<&'static [u8], Atom>>,
+    /// For each client window: the process id and the title, so that each
+    /// window is queried only once.
+    owners: RefCell<HashMap<Window, (Option<u32>, String)>>,
 }
 
 impl X11 {
     pub fn connect() -> Option<Self> {
         let (conn, screen) = x11rb::connect(None).ok()?;
         let root = conn.setup().roots[screen].root;
-        Some(Self { conn, root })
+        Some(Self {
+            conn,
+            root,
+            atoms: RefCell::default(),
+            owners: RefCell::default(),
+        })
     }
 
-    fn atom(&self, name: &[u8]) -> Option<Atom> {
+    fn atom(&self, name: &'static [u8]) -> Option<Atom> {
+        if let Some(&atom) = self.atoms.borrow().get(name) {
+            return Some(atom);
+        }
         let atom = self.conn.intern_atom(false, name).ok()?.reply().ok()?.atom;
-        (atom != 0).then_some(atom)
+        (atom != 0).then(|| {
+            self.atoms.borrow_mut().insert(name, atom);
+            atom
+        })
+    }
+
+    fn prop32(&self, win: Window, prop: Atom, ty: impl Into<Atom>) -> Vec<u32> {
+        self.conn
+            .get_property(false, win, prop, ty, 0, 1024)
+            .ok()
+            .and_then(|c| c.reply().ok())
+            .and_then(|r| r.value32().map(|v| v.collect()))
+            .unwrap_or_default()
+    }
+
+    /// The client windows of the process `pid`, with their titles. A window
+    /// that appears for the first time is queried; known windows come from a
+    /// cache.
+    fn windows_of(&self, pid: u32) -> Vec<(Window, String)> {
+        let (Some(client_list), Some(wm_pid), Some(wm_name), Some(utf8)) = (
+            self.atom(b"_NET_CLIENT_LIST"),
+            self.atom(b"_NET_WM_PID"),
+            self.atom(b"_NET_WM_NAME"),
+            self.atom(b"UTF8_STRING"),
+        ) else {
+            return Vec::new();
+        };
+        let clients = self.prop32(self.root, client_list, AtomEnum::WINDOW);
+        let mut owners = self.owners.borrow_mut();
+        owners.retain(|w, _| clients.contains(w));
+        let mut result = Vec::new();
+        for win in clients {
+            let (owner, title) = owners.entry(win).or_insert_with(|| {
+                let owner = self
+                    .prop32(win, wm_pid, AtomEnum::CARDINAL)
+                    .first()
+                    .copied();
+                let title = if owner == Some(pid) {
+                    self.conn
+                        .get_property(false, win, wm_name, utf8, 0, 256)
+                        .ok()
+                        .and_then(|c| c.reply().ok())
+                        .map(|r| String::from_utf8_lossy(&r.value).into_owned())
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                (owner, title)
+            });
+            if *owner == Some(pid) {
+                result.push((win, title.clone()));
+            }
+        }
+        result
     }
 
     /// Sets the window states of the windows of the process `pid`.
@@ -67,22 +136,14 @@ impl X11 {
     /// periodically.
     pub fn manage_windows(&self, pid: u32, pal_title: &str) {
         let atoms = [
-            "_NET_CLIENT_LIST",
-            "_NET_WM_PID",
-            "_NET_WM_NAME",
-            "UTF8_STRING",
-            "_NET_WM_STATE",
-            "_NET_WM_STATE_ABOVE",
-            "_NET_WM_STATE_STICKY",
-            "_NET_WM_STATE_SKIP_TASKBAR",
-            "_NET_WM_STATE_SKIP_PAGER",
+            b"_NET_WM_STATE".as_slice(),
+            b"_NET_WM_STATE_ABOVE",
+            b"_NET_WM_STATE_STICKY",
+            b"_NET_WM_STATE_SKIP_TASKBAR",
+            b"_NET_WM_STATE_SKIP_PAGER",
         ]
-        .map(|n| self.atom(n.as_bytes()));
+        .map(|n| self.atom(n));
         let [
-            Some(client_list),
-            Some(wm_pid),
-            Some(wm_name),
-            Some(utf8),
             Some(state),
             Some(above),
             Some(sticky),
@@ -92,30 +153,12 @@ impl X11 {
         else {
             return;
         };
-        let prop32 = |win: Window, prop: Atom, ty: AtomEnum| -> Vec<u32> {
-            self.conn
-                .get_property(false, win, prop, ty, 0, 1024)
-                .ok()
-                .and_then(|c| c.reply().ok())
-                .and_then(|r| r.value32().map(|v| v.collect()))
-                .unwrap_or_default()
-        };
-        for win in prop32(self.root, client_list, AtomEnum::WINDOW) {
-            if prop32(win, wm_pid, AtomEnum::CARDINAL).first() != Some(&pid) {
-                continue;
-            }
-            let title = self
-                .conn
-                .get_property(false, win, wm_name, utf8, 0, 256)
-                .ok()
-                .and_then(|c| c.reply().ok())
-                .map(|r| String::from_utf8_lossy(&r.value).into_owned())
-                .unwrap_or_default();
+        for (win, title) in self.windows_of(pid) {
             if title != pal_title {
                 continue;
             }
             let wanted = [skip_taskbar, skip_pager, above, sticky];
-            let current = prop32(win, state, AtomEnum::ATOM);
+            let current = self.prop32(win, state, AtomEnum::ATOM);
             let missing: Vec<u32> = wanted
                 .into_iter()
                 .filter(|a| !current.contains(a))
@@ -138,34 +181,10 @@ impl X11 {
 
     /// The window of the process `pid` with the title `title`.
     pub fn find_window(&self, pid: u32, title: &str) -> Option<Window> {
-        let client_list = self.atom(b"_NET_CLIENT_LIST")?;
-        let wm_pid = self.atom(b"_NET_WM_PID")?;
-        let wm_name = self.atom(b"_NET_WM_NAME")?;
-        let utf8 = self.atom(b"UTF8_STRING")?;
-        let windows: Vec<u32> = self
-            .conn
-            .get_property(false, self.root, client_list, AtomEnum::WINDOW, 0, 1024)
-            .ok()?
-            .reply()
-            .ok()?
-            .value32()?
-            .collect();
-        windows.into_iter().find(|&win| {
-            let pid_ok = self
-                .conn
-                .get_property(false, win, wm_pid, AtomEnum::CARDINAL, 0, 1)
-                .ok()
-                .and_then(|c| c.reply().ok())
-                .and_then(|r| r.value32().and_then(|mut v| v.next()))
-                == Some(pid);
-            pid_ok
-                && self
-                    .conn
-                    .get_property(false, win, wm_name, utf8, 0, 256)
-                    .ok()
-                    .and_then(|c| c.reply().ok())
-                    .is_some_and(|r| r.value == title.as_bytes())
-        })
+        self.windows_of(pid)
+            .into_iter()
+            .find(|(_, t)| t == title)
+            .map(|(w, _)| w)
     }
 
     /// The active window (`_NET_ACTIVE_WINDOW`).

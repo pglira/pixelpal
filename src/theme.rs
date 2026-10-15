@@ -122,6 +122,11 @@ pub fn set_fonts(ctx: &egui::Context, font_file: &str) -> Result<(), String> {
     let path = font_file.trim();
     if !path.is_empty() {
         match std::fs::read(path) {
+            // egui panics on font data that it cannot parse, so parse it first
+            // with the same parser.
+            Ok(bytes) if skrifa::FontRef::from_index(&bytes, 0).is_err() => {
+                result = Err("The font file is not a valid TTF or OTF font.".into());
+            }
             Ok(bytes) => {
                 defs.font_data
                     .insert(CHAT_FONT.to_owned(), Arc::new(FontData::from_owned(bytes)));

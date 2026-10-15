@@ -254,12 +254,70 @@ impl Pal {
         CANVAS * scale as f32
     }
 
-    pub fn is_moving(&self) -> bool {
-        !matches!(self.motion, Motion::Stand { .. } | Motion::Sleep)
+    /// Seconds until the pal looks different, so that the app repaints only
+    /// then. `ppp` is the number of physical pixels per point. `idle` is the
+    /// time since the last input of the user.
+    pub fn next_change(
+        &self,
+        now: f64,
+        cfg: &Config,
+        ppp: f32,
+        may_move: bool,
+        idle: Option<std::time::Duration>,
+    ) -> f64 {
+        const FRAME: f64 = 1.0 / 60.0;
+        let mut t = match &self.motion {
+            Motion::Fall { .. } | Motion::Held => FRAME,
+            Motion::Walk { .. } if self.hop.is_some() => FRAME,
+            Motion::Walk { speed, .. } => {
+                // The window moves by one physical pixel.
+                let px_per_second = cfg.walk_speed * speed * ppp.max(0.1);
+                (1.0 / px_per_second.max(1.0)) as f64
+            }
+            Motion::Act { shots, start, .. } => {
+                // The next shot starts.
+                let mut end = 0.0;
+                let elapsed = (now - start) as f32;
+                for s in shots {
+                    end += s.secs;
+                    if end > elapsed {
+                        break;
+                    }
+                }
+                (end - elapsed).max(0.0) as f64
+            }
+            Motion::Stand { until } if self.hop.is_some() => FRAME.min(until - now),
+            Motion::Stand { until } => until - now,
+            // The Zzz rise half a sprite pixel per game frame. After a long
+            // absence, they slow down to save power.
+            Motion::Sleep if idle.is_some_and(|d| d.as_secs() >= 30 * 60) => 1.0,
+            Motion::Sleep => 4.0 * FRAME,
+        };
+        match self.mood {
+            // The dots of the bubble change three times per second.
+            Mood::Thinking => t = t.min(1.0 / 3.0 - now.rem_euclid(1.0 / 3.0)),
+            Mood::Happy { .. } => t = FRAME,
+            Mood::Calm => {}
+        }
+        // A pal that may chase checks the pointer five times per second.
+        if self.wants_pointer(now, cfg, may_move) {
+            t = t.min(0.2);
+        }
+        t.max(FRAME)
     }
 
-    pub fn is_sleeping(&self) -> bool {
-        matches!(self.motion, Motion::Sleep)
+    /// True if the pal uses the pointer position now: for a chase, or to see
+    /// whether one can start.
+    pub fn wants_pointer(&self, now: f64, cfg: &Config, may_move: bool) -> bool {
+        match self.motion {
+            Motion::Walk { chase: Some(_), .. } => true,
+            Motion::Stand { .. } => cfg.chase && may_move && now >= self.next_chase,
+            _ => false,
+        }
+    }
+
+    pub fn is_held(&self) -> bool {
+        matches!(self.motion, Motion::Held)
     }
 
     pub fn hold(&mut self) {
@@ -326,6 +384,7 @@ impl Pal {
                 if away && self.mood != Mood::Thinking =>
             {
                 self.motion = Motion::Sleep;
+                self.mood = Mood::Calm;
                 self.facing = Dir::Down;
                 self.hop = None;
             }
@@ -543,8 +602,11 @@ impl Pal {
         let near_ground = p.y >= feet - 60.0 * scale && p.y <= area.bottom + 4.0;
         let in_range = dx.abs() >= CHASE_RANGE.0 * scale && dx.abs() <= CHASE_RANGE.1 * scale;
         let chasing = matches!(self.motion, Motion::Walk { chase: Some(_), .. });
+        // The target stays inside the area, so that a pointer near the screen
+        // edge can be caught.
+        let max_x = (area.right - size.x).max(area.left);
         (near_ground && (in_range || (chasing && dx.abs() <= CHASE_RANGE.1 * scale)))
-            .then(|| p.x - size.x / 2.0 - dx.signum() * 6.0 * scale)
+            .then(|| (p.x - size.x / 2.0 - dx.signum() * 6.0 * scale).clamp(area.left, max_x))
     }
 
     fn start_walk(&mut self, now: f64, cfg: &Config, min_x: f32, max_x: f32, width: f32) {
@@ -619,6 +681,13 @@ impl Pal {
         )
     }
 
+    /// The area of `rect`, the full pal window, that takes clicks: Link's body
+    /// with a small margin, and the space of the highest hop above his head.
+    pub fn click_rect(rect: Rect, sprites: &Sprites, scale: f32) -> Rect {
+        let body = Self::body(rect, sprites, scale).expand(2.0 * scale);
+        Rect::from_min_max(body.min - vec2(0.0, HOP_HEIGHT.1 * scale), body.max)
+    }
+
     /// Draws the pal into `rect`, the full pal window.
     pub fn paint(&self, painter: &Painter, rect: Rect, sprites: &Sprites, cfg: &Config, now: f64) {
         let scale = cfg.scale as f32;
@@ -639,16 +708,16 @@ impl Pal {
         } else {
             Color32::WHITE
         };
-        // Draws frame `frame` of `clip` with the clip origin at `at`.
+        // Draws frame `frame` of `clip` with the clip origin at `at`. The
+        // frames lie side by side in the texture of the strip.
         let draw = |clip: &Clip, frame: usize, at: Pos2| {
-            if let Some(texture) = clip.frames.get(frame).or(clip.frames.first()) {
-                painter.image(
-                    texture.id(),
-                    Rect::from_min_size((at - clip.origin * scale).round(), clip.size * scale),
-                    Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
-                    tint,
-                );
-            }
+            let (i, n) = (frame.min(clip.frames - 1) as f32, clip.frames as f32);
+            painter.image(
+                clip.texture.id(),
+                Rect::from_min_size((at - clip.origin * scale).round(), clip.size * scale),
+                Rect::from_min_max(pos2(i / n, 0.0), pos2((i + 1.0) / n, 1.0)),
+                tint,
+            );
         };
 
         // In the air, the shadow stays on the ground below Link.
@@ -690,7 +759,7 @@ impl Pal {
 fn paint_zzz(draw: &impl Fn(&Clip, usize, Pos2), zzz: &Clip, origin: Pos2, scale: f32, now: f64) {
     let frames = now * 60.0;
     let newest = (frames % 32.0) as f32;
-    let frame = ((newest / 8.0) as usize).min(zzz.frames.len().saturating_sub(1));
+    let frame = ((newest / 8.0) as usize).min(zzz.frames - 1);
     for age in [newest, newest + 32.0] {
         if age >= 56.0 {
             continue;

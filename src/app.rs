@@ -100,6 +100,8 @@ pub struct PalApp {
     /// The last senses of the pal, and the time of their last full query.
     senses: Senses,
     senses_time: f64,
+    /// The last input shape of the pal window.
+    input_shape: Option<(u32, PxRect)>,
 }
 
 impl PalApp {
@@ -154,6 +156,7 @@ impl PalApp {
             sent_scale: cfg.scale,
             senses: Senses::default(),
             senses_time: f64::NEG_INFINITY,
+            input_shape: None,
             saved_cfg: cfg.clone(),
             cfg,
         }
@@ -172,7 +175,12 @@ impl PalApp {
         self.area_time = now;
         let ppp = Self::pixels_per_point(ctx);
         let size = Pal::window_size(self.cfg.scale);
-        let center = self.pal.pos + size / 2.0;
+        let mut center = self.pal.pos + size / 2.0;
+        // Only a drag moves the pal to another monitor. A pal that drops from
+        // above the screen stays on its monitor.
+        if !self.pal.is_held() {
+            center.y = center.y.clamp(self.area.top, self.area.bottom - 1.0);
+        }
         if let Some(r) = self
             .x11
             .as_ref()
@@ -196,7 +204,8 @@ impl PalApp {
 
     /// What the pal perceives now. The idle time and the hour are queried at
     /// most once per second.
-    fn senses(&mut self, ctx: &egui::Context, now: f64) -> Senses {
+    /// The pointer is queried only while the pal uses it.
+    fn senses(&mut self, ctx: &egui::Context, now: f64, may_move: bool) -> Senses {
         if now - self.senses_time >= 1.0 {
             self.senses_time = now;
             self.senses.idle = self.x11.as_ref().and_then(X11::idle_time);
@@ -204,7 +213,7 @@ impl PalApp {
                 .cfg
                 .is_night_hour(chrono::Timelike::hour(&chrono::Local::now()));
         }
-        self.senses.pointer = if self.cfg.chase {
+        self.senses.pointer = if self.pal.wants_pointer(now, &self.cfg, may_move) {
             self.pointer(ctx)
         } else {
             None
@@ -243,6 +252,10 @@ impl PalApp {
             }
             if resp.drag_stopped() || !ctx.input(|i| i.pointer.primary_down()) {
                 self.drag_offset = None;
+                // The drop may be on another monitor: find its area before the
+                // pal falls.
+                self.area_time = f64::NEG_INFINITY;
+                self.refresh_area(&ctx, ctx.input(|i| i.time));
                 self.pal.release();
             }
         }
@@ -598,19 +611,19 @@ impl eframe::App for PalApp {
                 // Only Link's body takes clicks; the rest of the pal window
                 // lets them through to the windows below.
                 if let Some(win) = x.find_window(std::process::id(), PAL_TITLE) {
-                    let scale = self.cfg.scale as f32;
                     let ppp = Self::pixels_per_point(&ctx);
                     let full = Rect::from_min_size(Pos2::ZERO, Pal::window_size(self.cfg.scale));
-                    let body = Pal::body(full, &self.sprites, scale).expand(2.0 * scale);
-                    x.set_input_rect(
-                        win,
-                        PxRect {
-                            x: (body.min.x * ppp).floor() as i32,
-                            y: (body.min.y * ppp).floor() as i32,
-                            w: (body.width() * ppp).ceil() as i32,
-                            h: (body.height() * ppp).ceil() as i32,
-                        },
-                    );
+                    let click = Pal::click_rect(full, &self.sprites, self.cfg.scale as f32);
+                    let shape = PxRect {
+                        x: (click.min.x * ppp).floor() as i32,
+                        y: (click.min.y * ppp).floor() as i32,
+                        w: (click.width() * ppp).ceil() as i32,
+                        h: (click.height() * ppp).ceil() as i32,
+                    };
+                    if self.input_shape != Some((win, shape)) {
+                        x.set_input_rect(win, shape);
+                        self.input_shape = Some((win, shape));
+                    }
                 }
             }
         }
@@ -622,10 +635,14 @@ impl eframe::App for PalApp {
             self.settings_ui.font_error = theme::set_fonts(&ctx, font).err();
         }
 
-        // Pal mood from the chat.
+        // Pal mood from the chat. `unlocked` is true when this turn unlocks a
+        // new gear tier.
+        let mut unlocked = false;
         match self.chat.poll(&self.cfg) {
             Some(TurnEnd::Success) => {
+                let before = self.progress.tier();
                 self.progress.completed += 1;
+                unlocked = self.progress.tier() > before;
                 self.progress.save();
                 self.settings_ui.progress = self.progress.summary();
                 self.pal.celebrate(now);
@@ -640,9 +657,8 @@ impl eframe::App for PalApp {
             0
         };
         if tier != self.sprites.tier {
-            let level_up = tier > self.sprites.tier && self.cfg.gear_progress;
             self.sprites = Sprites::load(&ctx, tier);
-            if level_up {
+            if unlocked && self.cfg.gear_progress {
                 self.pal.level_up(now, &self.sprites);
             }
         }
@@ -660,12 +676,11 @@ impl eframe::App for PalApp {
 
         let rect = ui.max_rect();
         // Only Link's body reacts to the mouse, not the empty space around him.
-        let scale = self.cfg.scale as f32;
-        let body = Pal::body(rect, &self.sprites, scale).expand(2.0 * scale);
-        self.handle_input(ui, body);
+        let click = Pal::click_rect(rect, &self.sprites, self.cfg.scale as f32);
+        self.handle_input(ui, click);
 
         let may_move = !self.panel_open && !self.chat.is_running() && self.menu.is_none();
-        let senses = self.senses(&ctx, now);
+        let senses = self.senses(&ctx, now, may_move);
         self.pal.update(
             now,
             dt,
@@ -712,15 +727,19 @@ impl eframe::App for PalApp {
             self.saved_cfg = self.cfg.clone();
         }
 
-        let animating = self.pal.is_moving() || self.pal.mood != crate::pal::Mood::Calm;
-        // The Zzz of a sleeping pal need fewer frames than a walk.
-        ctx.request_repaint_after(std::time::Duration::from_millis(if animating {
-            16
-        } else if self.pal.is_sleeping() {
-            66
-        } else {
-            250
-        }));
+        // Repaint when the pal changes, and at least once per second for the
+        // periodic checks (monitor area, window states, idle time, night).
+        // Input events, the tray and the `claude` reader repaint at once.
+        let may_move = !self.panel_open && !self.chat.is_running() && self.menu.is_none();
+        let ppp = Self::pixels_per_point(&ctx);
+        let mut next = self
+            .pal
+            .next_change(now, &self.cfg, ppp, may_move, self.senses.idle)
+            .min(1.0);
+        if !self.focus_pending.is_empty() {
+            next = next.min(FOCUS_INTERVAL);
+        }
+        ctx.request_repaint_after(Duration::from_secs_f64(next));
     }
 }
 

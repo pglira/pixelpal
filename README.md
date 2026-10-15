@@ -22,7 +22,7 @@ A desktop pal for Linux. Link from *The Legend of Zelda: A Link to the Past* wal
 - A panel with a StatusNotifierItem tray, for the tray icon (on XFCE: the "Status Tray" plugin).
 - A compositor, for the transparent window. On XFCE: Settings → Window Manager Tweaks → Compositor → Enable display compositing.
 - Rust 1.95 or newer.
-- GTK 3 development files, for the folder dialog (Debian/Ubuntu: `libgtk-3-dev`).
+- Optional: `zenity` or `kdialog`, for the **Browse…** buttons of the settings. Without them, type the path.
 - Claude Code (`claude`), logged in.
 
 ## Animations
@@ -113,6 +113,21 @@ The settings are in the text file `~/.config/pixelpal/config.toml` (TOML). The s
 | Everything | `--permission-mode bypassPermissions` | Claude can do everything without a question. |
 | Custom | `--allowedTools <your list>` | Claude can use the listed tools without a question. |
 
+## Resource use
+
+pixelpal repaints only when Link changes, and it polls X11 at most once per second when he stands still. Measured on X11 with Mesa at scale 3:
+
+| State | CPU | Memory (PSS) |
+|---|---|---|
+| Standing | about 0.1 % | about 50 MB, mostly shared GL libraries |
+| Walking and actions | about 0.8 % | the same |
+| Asleep while you are away | about 0.8 %, and 1 frame per second after 30 minutes | the same |
+
+## Known limits
+
+- On HiDPI X11 setups (`Xft.dpi` above 96), the first position at start can be on the wrong monitor. The pal moves to the correct place after the first fall.
+- If `claude` closes its output but does not exit, **Stop** cannot end it.
+
 ## Source layout
 
 | File | Content |
@@ -123,6 +138,7 @@ The settings are in the text file `~/.config/pixelpal/config.toml` (TOML). The s
 | `src/actions.rs` | The actions and reactions, built from the playback sequences of the game, and the object scenes |
 | `src/link.rs` | Loading of the embedded animations of one gear tier (`assets/link/tier<N>/`) |
 | `src/progress.rs` | Completed chats and the gear tiers they unlock |
+| `src/picker.rs` | File and folder dialogs through `zenity` or `kdialog` |
 | `build.rs` | Embeds the files of `assets/link/tier<N>/` |
 | `tools/link-extract/` | Extraction of the animations from the game |
 | `src/workarea.rs` | Usable screen area, pointer position and window states from X11 |

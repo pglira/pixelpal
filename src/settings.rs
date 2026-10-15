@@ -1,10 +1,12 @@
 //! The configuration file and the settings window.
 
 use std::path::PathBuf;
+use std::sync::mpsc::Receiver;
 
 use egui::{ComboBox, DragValue, RichText, Ui};
 use serde::{Deserialize, Serialize};
 
+use crate::picker::{self, Pick, PickResult};
 use crate::theme::ChatTheme;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,12 +138,43 @@ impl Default for Config {
 
 impl Config {
     /// True if `hour` (0 to 23) is a night hour. A night can span midnight.
+    /// Equal start and end hours mean a night that lasts all day.
     pub fn is_night_hour(&self, hour: u32) -> bool {
         let (start, end) = (self.night_start % 24, self.night_end % 24);
-        if start <= end {
+        if start < end {
             hour >= start && hour < end
         } else {
             hour >= start || hour < end
+        }
+    }
+
+    /// Clamps the values to the ranges of the settings window, so that a
+    /// hand-edited file cannot stop the pal. Values that are not numbers get
+    /// the defaults.
+    pub fn sanitize(&mut self) {
+        let d = Config::default();
+        let fix = |v: f32, lo: f32, hi: f32, default: f32| {
+            if v.is_finite() {
+                v.clamp(lo, hi)
+            } else {
+                default
+            }
+        };
+        self.scale = self.scale.clamp(2, 4);
+        self.walk_speed = fix(self.walk_speed, 5.0, 400.0, d.walk_speed);
+        self.pause_min = fix(self.pause_min, 0.0, 600.0, d.pause_min);
+        self.pause_max = fix(self.pause_max, 0.0, 600.0, d.pause_max);
+        self.walk_stride = fix(self.walk_stride, 0.5, 10.0, d.walk_stride);
+        self.gravity = fix(self.gravity, 0.5, 100.0, d.gravity);
+        self.bottom_margin = fix(self.bottom_margin, 0.0, 500.0, d.bottom_margin);
+        self.action_chance = fix(self.action_chance, 0.0, 1.0, d.action_chance);
+        self.idle_minutes = fix(self.idle_minutes, 0.5, 240.0, d.idle_minutes);
+        self.night_start %= 24;
+        self.night_end %= 24;
+        self.panel_width = fix(self.panel_width, 280.0, 8000.0, d.panel_width);
+        self.panel_height = fix(self.panel_height, 240.0, 8000.0, d.panel_height);
+        if self.models.is_empty() {
+            self.models = d.models;
         }
     }
 
@@ -160,8 +193,11 @@ impl Config {
         let Ok(text) = std::fs::read_to_string(&path) else {
             return (Self::default(), None);
         };
-        match toml::from_str(&text) {
-            Ok(cfg) => (cfg, None),
+        match toml::from_str::<Config>(&text) {
+            Ok(mut cfg) => {
+                cfg.sanitize();
+                (cfg, None)
+            }
             Err(e) => {
                 let backup = path.with_extension("toml.bak");
                 let _ = std::fs::write(&backup, &text);
@@ -262,11 +298,36 @@ pub struct SettingsUi {
     pub font_error: Option<String>,
     /// The progress of Link, as one line.
     pub progress: String,
+    /// The open file or folder dialog, if any.
+    picking: Option<(Pick, Receiver<PickResult>)>,
 }
 
 impl SettingsUi {
+    /// Opens a file or folder dialog, unless one is open already.
+    fn pick(&mut self, ui: &Ui, pick: Pick, start: &std::path::Path) {
+        if self.picking.is_none() {
+            self.picking = Some((pick, picker::open(pick, start, ui.ctx().clone())));
+        }
+    }
+
+    /// Takes the result of the open dialog, if it has arrived.
+    fn take_pick(&mut self, cfg: &mut Config) {
+        let Some((pick, rx)) = &self.picking else {
+            return;
+        };
+        let Ok(result) = rx.try_recv() else { return };
+        match (pick, result) {
+            (Pick::Folder, Ok(Some(path))) => cfg.working_dir = path,
+            (Pick::Font, Ok(Some(path))) => cfg.theme.font_file = path,
+            (_, Ok(None)) => {}
+            (_, Err(e)) => self.status = Some(e),
+        }
+        self.picking = None;
+    }
+
     /// Shows the settings and changes `cfg` in place.
     pub fn show(&mut self, ui: &mut Ui, cfg: &mut Config) {
+        self.take_pick(cfg);
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -307,7 +368,7 @@ impl SettingsUi {
                 ui.checkbox(&mut cfg.chase, "");
                 ui.end_row();
                 ui.label("Day and night")
-                    .on_hover_text("At night, Link is darker, strolls, and only dozes, sleeps, reads or prays.");
+                    .on_hover_text("At night, Link is darker, strolls, and only dozes, sleeps, reads or prays. Equal hours mean a night that lasts all day.");
                 ui.horizontal(|ui| {
                     ui.checkbox(&mut cfg.day_night, "");
                     ui.add_enabled_ui(cfg.day_night, |ui| {
@@ -376,13 +437,8 @@ impl SettingsUi {
                             .desired_width(200.0),
                     );
                     if ui.button("Browse…").clicked() {
-                        let mut dialog = rfd::FileDialog::new();
-                        if let Some(dir) = cfg.working_dir() {
-                            dialog = dialog.set_directory(dir);
-                        }
-                        if let Some(dir) = dialog.pick_folder() {
-                            cfg.working_dir = dir.display().to_string();
-                        }
+                        let start = cfg.working_dir().unwrap_or_default();
+                        self.pick(ui, Pick::Folder, &start);
                     }
                 });
                 ui.end_row();
@@ -513,15 +569,12 @@ impl SettingsUi {
                             .desired_width(200.0),
                     );
                     if ui.button("Browse…").clicked() {
-                        let mut dialog = rfd::FileDialog::new().add_filter("Fonts", &["ttf", "otf", "TTF", "OTF"]);
-                        if let Some(dir) = std::path::Path::new(t.font_file.trim()).parent() {
-                            dialog = dialog.set_directory(dir);
-                        } else if std::path::Path::new("/usr/share/fonts").is_dir() {
-                            dialog = dialog.set_directory("/usr/share/fonts");
-                        }
-                        if let Some(file) = dialog.pick_file() {
-                            t.font_file = file.display().to_string();
-                        }
+                        let start = std::path::Path::new(t.font_file.trim())
+                            .parent()
+                            .filter(|d| d.is_dir())
+                            .map(PathBuf::from)
+                            .unwrap_or_else(|| PathBuf::from("/usr/share/fonts"));
+                        self.pick(ui, Pick::Font, &start);
                     }
                     if !t.font_file.is_empty() && ui.small_button("×").on_hover_text("Built-in font").clicked() {
                         t.font_file.clear();
@@ -562,5 +615,31 @@ mod tests {
             ..Config::default()
         };
         assert!(day.is_night_hour(1) && day.is_night_hour(4) && !day.is_night_hour(5));
+        let always = Config {
+            night_start: 3,
+            night_end: 3,
+            ..Config::default()
+        };
+        assert!((0..24).all(|h| always.is_night_hour(h)));
+    }
+
+    #[test]
+    fn sanitize_repairs_bad_values() {
+        let mut cfg = Config {
+            scale: 0,
+            gravity: -1.0,
+            walk_speed: 0.0,
+            idle_minutes: f32::NAN,
+            panel_width: -5.0,
+            models: Vec::new(),
+            ..Config::default()
+        };
+        cfg.sanitize();
+        assert_eq!(cfg.scale, 2);
+        assert_eq!(cfg.gravity, 0.5);
+        assert_eq!(cfg.walk_speed, 5.0);
+        assert_eq!(cfg.idle_minutes, Config::default().idle_minutes);
+        assert_eq!(cfg.panel_width, 280.0);
+        assert!(!cfg.models.is_empty());
     }
 }
