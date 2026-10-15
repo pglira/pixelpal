@@ -1,0 +1,26 @@
+[package]
+name = "pixelpal"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+description = "A desktop pal that walks along the bottom of the screen and chats through the Claude Code CLI"
+license = "MIT"
+
+[dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+dirs = "7.0.0"
+eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow", "x11"] }
+egui = "0.36.2"
+egui_commonmark = "0.25.0"
+fastrand = "2.5.0"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+ksni = { version = "0.3.6", default-features = false, features = ["blocking", "async-io"] }
+rfd = { version = "0.17.2", default-features = false, features = ["gtk3"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+toml = "1.1.8"
+x11rb = { version = "0.14.0", features = ["randr"] }
+
+[profile.release]
+lto = "thin"
+strip = true
