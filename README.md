@@ -82,6 +82,7 @@ The settings are in the text file `~/.config/pixelpal/config.toml` (TOML). The s
 | Walk on the desktop | Turns the walking on or off. |
 | Play actions, action chance | Turns the random actions on or off, and sets the probability that an action follows a pause instead of a walk (default 50 %). |
 | Walk speed, pause between walks | Speed in px/s, and the random pause in seconds. |
+| Vary the walk speed | Each walk gets a random gait: a stroll (½ of the walk speed), a walk, a hurry (1.7×), or a Pegasus dash (3.5×) after a short run in place. |
 | Walk distance per frame | Distance in sprite pixels for one frame of the walk cycle. Larger values give slower steps at the same walk speed. |
 | Scale | Size of the pal: 2×, 3× or 4×. |
 | Gravity | Acceleration of a fall after a drag, in m/s² (default 9.81). 16 sprite pixels count as 1 m. |

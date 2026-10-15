@@ -22,6 +22,55 @@ const HAPPY_SECONDS: f64 = 1.6;
 /// Smallest walk distance, in points.
 const MIN_WALK: f32 = 24.0;
 
+/// A way to walk: a factor of the configured walk speed, and the weight of
+/// the gait in a random choice.
+struct Gait {
+    speed: f32,
+    weight: u32,
+    /// Seconds of running in place before the walk, as with the Pegasus Boots.
+    run_up: f64,
+}
+
+static GAITS: [Gait; 4] = [
+    // Stroll.
+    Gait {
+        speed: 0.5,
+        weight: 25,
+        run_up: 0.0,
+    },
+    // Walk.
+    Gait {
+        speed: 1.0,
+        weight: 40,
+        run_up: 0.0,
+    },
+    // Hurry.
+    Gait {
+        speed: 1.7,
+        weight: 25,
+        run_up: 0.0,
+    },
+    // Dash with the Pegasus Boots.
+    Gait {
+        speed: 3.5,
+        weight: 10,
+        run_up: 0.5,
+    },
+];
+
+/// A random gait from `GAITS`, by weight.
+fn random_gait() -> &'static Gait {
+    let total: u32 = GAITS.iter().map(|g| g.weight).sum();
+    let mut r = fastrand::u32(..total);
+    for g in &GAITS {
+        if r < g.weight {
+            return g;
+        }
+        r -= g.weight;
+    }
+    &GAITS[1]
+}
+
 /// The usable area of the current monitor, in points.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Area {
@@ -38,6 +87,10 @@ enum Motion {
     },
     Walk {
         target: f32,
+        /// Factor of the configured walk speed.
+        speed: f32,
+        /// Until this time, the pal runs in place.
+        run_up_until: f64,
     },
     Fall {
         vy: f32,
@@ -185,14 +238,22 @@ impl Pal {
                     }
                 }
             }
-            Motion::Walk { target } => {
+            Motion::Walk {
+                target,
+                speed,
+                run_up_until,
+            } => {
+                let d = target - self.pos.x;
                 if !may_move || !cfg.walk {
                     self.motion = Motion::Stand {
                         until: now + pause(cfg),
                     };
+                } else if now < run_up_until {
+                    // Run in place: the legs move, the pal stays.
+                    self.facing = if d > 0.0 { Dir::Right } else { Dir::Left };
+                    self.walk_distance += cfg.walk_speed * speed * dt;
                 } else {
-                    let step = cfg.walk_speed * dt;
-                    let d = target - self.pos.x;
+                    let step = cfg.walk_speed * speed * dt;
                     self.facing = if d > 0.0 { Dir::Right } else { Dir::Left };
                     self.walk_distance += step.min(d.abs());
                     if d.abs() <= step {
@@ -271,7 +332,16 @@ impl Pal {
         let hi = (max_x - width).max(lo);
         let target = lo + fastrand::f32() * (hi - lo);
         self.motion = if (target - self.pos.x).abs() >= MIN_WALK {
-            Motion::Walk { target }
+            let gait = if cfg.vary_speed {
+                random_gait()
+            } else {
+                &GAITS[1]
+            };
+            Motion::Walk {
+                target,
+                speed: gait.speed,
+                run_up_until: now + gait.run_up,
+            }
         } else {
             Motion::Stand {
                 until: now + pause(cfg),
@@ -413,5 +483,21 @@ fn paint_stars(painter: &Painter, sprite: Rect, s: f32, now: f64) {
         painter.line_segment([c - vec2(r, 0.0), c + vec2(r, 0.0)], stroke);
         painter.line_segment([c - vec2(0.0, r), c + vec2(0.0, r)], stroke);
         painter.circle_filled(c, 0.8 * s, Color32::WHITE);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_gait_occurs() {
+        let mut seen = [false; GAITS.len()];
+        for _ in 0..10_000 {
+            let g = random_gait();
+            let i = GAITS.iter().position(|x| std::ptr::eq(x, g)).unwrap();
+            seen[i] = true;
+        }
+        assert!(seen.iter().all(|&s| s));
     }
 }
