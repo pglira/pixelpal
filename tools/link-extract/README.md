@@ -17,10 +17,27 @@ ignores. Never commit the output.
 
 ## Usage
 
+pixelpal needs all gear tiers. One command builds the tool and writes them to
+`assets/link/tier0` … `assets/link/tier4`:
+
+```sh
+tools/link-extract/extract_all.sh <zelda3-dir> assets/link
+```
+
+| Tier | Sword | Shield | Armor |
+|---|---|---|---|
+| 0 | Fighter's Sword | Fighter's Shield | Green Mail |
+| 1 | Master Sword | Fire Shield | Green Mail |
+| 2 | Master Sword | Fire Shield | Blue Mail |
+| 3 | Tempered Sword | Mirror Shield | Blue Mail |
+| 4 | Golden Sword | Mirror Shield | Red Mail |
+
+To extract one set of gear by hand:
+
 ```sh
 tools/link-extract/build.sh <zelda3-dir> /tmp/link-extract
 (cd <zelda3-dir> && /tmp/link-extract /tmp/poses.bin 1 1 0)
-python3 tools/link-extract/pack.py /tmp/poses.bin assets/link
+python3 tools/link-extract/pack.py /tmp/poses.bin <out-dir>
 ```
 
 The arguments after the output file of `link-extract` select the equipment:
@@ -39,6 +56,15 @@ shield) and armor 0-2 (0 = green mail).
 - `shadow_<direction>.png`: the ground shadow of Link, as the game draws it
   below him. `animations.json` lists it under `shadows`, with its origin: the
   position of Link's coordinate point when he stands on the ground.
+- Extra strips, listed under `extras`, with the top-left corner of the object
+  as origin:
+  - `rock.png`, `bush.png`, `skull.png`: the liftable objects, as the game
+    draws them while Link carries them (sprite 0xEC). The rock and the bush
+    come from the light-world sprite pack 1. The skull pot comes from the
+    dungeon pack 10, which holds no plain pot.
+  - `rock_debris.png`, `bush_debris.png`, `skull_debris.png`: the 8 frames of
+    the debris when an object breaks (`Garnish16_ThrownItemDebris`).
+  - `zzz.png`: the 3 sizes of the Zzz of a sleeping Link (`Ancilla21_Snore`).
 - `preview.png`: an overview of all strips with their names.
 
 The sequences come from the timer tables and state handlers in zelda3's

@@ -37,8 +37,8 @@ if [ "${1:-}" = "--uninstall" ]; then
     exit 0
 fi
 
-if [ ! -f assets/link/animations.json ]; then
-    echo "assets/link/animations.json is missing. See README.md, section \"Animations\"." >&2
+if [ ! -f assets/link/tier0/animations.json ]; then
+    echo "assets/link/tier0/animations.json is missing. See README.md, section \"Animations\"." >&2
     exit 1
 fi
 

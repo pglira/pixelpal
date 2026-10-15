@@ -1,48 +1,60 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
-/// Directory of the animations that `tools/link-extract` writes.
+/// Directory of the animations that `tools/link-extract` writes: one
+/// subdirectory per gear tier, `tier0`, `tier1`, ...
 const DIR: &str = "assets/link";
 
-/// Embeds `assets/link/animations.json` and every strip PNG of that directory:
-/// writes `$OUT_DIR/link_assets.rs` with one `include_bytes!` per file.
+/// Embeds `animations.json` and every PNG of each tier directory: writes
+/// `$OUT_DIR/link_assets.rs` with one `include_bytes!` per file.
 fn main() {
     println!("cargo:rerun-if-changed={DIR}");
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join(DIR);
-    let index = root.join("animations.json");
-    if !index.is_file() {
+
+    let mut tiers = Vec::new();
+    while root
+        .join(format!("tier{}", tiers.len()))
+        .join("animations.json")
+        .is_file()
+    {
+        tiers.push(root.join(format!("tier{}", tiers.len())));
+    }
+    if tiers.is_empty() {
         panic!(
-            "\n\n{DIR}/animations.json is missing.\n\
+            "\n\n{DIR}/tier0/animations.json is missing.\n\
              Extract the animations of Link from your copy of the game with \
-             tools/link-extract. See README.md, section \"Animations\".\n\n"
+             tools/link-extract/extract_all.sh. See README.md, section \"Animations\".\n\n"
         );
     }
 
-    let mut strips: Vec<String> = std::fs::read_dir(&root)
-        .expect("assets/link is readable")
-        .filter_map(|e| e.ok()?.file_name().into_string().ok())
-        .filter(|n| n.ends_with(".png") && n != "preview.png")
-        .collect();
-    strips.sort();
-
-    let mut code = String::new();
-    println!("cargo:rerun-if-changed={}", index.display());
-    writeln!(
-        code,
-        "pub const ANIMATIONS_JSON: &[u8] = include_bytes!({:?});",
-        index.display().to_string()
-    )
-    .unwrap();
-    code.push_str("pub const STRIPS: &[(&str, &[u8])] = &[\n");
-    for name in &strips {
-        let path = root.join(name);
-        println!("cargo:rerun-if-changed={}", path.display());
+    let mut code = String::from("pub const TIERS: &[Tier] = &[\n");
+    for dir in &tiers {
+        println!("cargo:rerun-if-changed={}", dir.display());
+        let index = dir.join("animations.json");
+        println!("cargo:rerun-if-changed={}", index.display());
+        let mut strips: Vec<String> = std::fs::read_dir(dir)
+            .expect("the tier directory is readable")
+            .filter_map(|e| e.ok()?.file_name().into_string().ok())
+            .filter(|n| n.ends_with(".png") && n != "preview.png")
+            .collect();
+        strips.sort();
         writeln!(
             code,
-            "    ({name:?}, include_bytes!({:?})),",
-            path.display().to_string()
+            "    Tier {{\n        json: include_bytes!({:?}),\n        strips: &[",
+            index.display().to_string()
         )
         .unwrap();
+        for name in &strips {
+            let path = dir.join(name);
+            println!("cargo:rerun-if-changed={}", path.display());
+            writeln!(
+                code,
+                "            ({name:?}, include_bytes!({:?})),",
+                path.display().to_string()
+            )
+            .unwrap();
+        }
+        code.push_str("        ],\n    },\n");
     }
     code.push_str("];\n");
 

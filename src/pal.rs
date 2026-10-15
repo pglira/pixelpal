@@ -5,13 +5,14 @@ use std::f32::consts::TAU;
 use egui::{Color32, Painter, Pos2, Rect, Stroke, Vec2, pos2, vec2};
 
 use crate::actions::{self, ACTIONS, Shot, Then};
-use crate::link::{Dir, Sprites};
+use crate::chat::ToolActivity;
+use crate::link::{Clip, Dir, Sprites};
 use crate::settings::Config;
 
 /// Size of the pal window in sprite pixels. Link stands at the bottom center.
-/// The space around him holds the swords and items of the actions, and the
-/// speech bubble.
-pub const CANVAS: Vec2 = vec2(52.0, 46.0);
+/// The space around him holds the swords, items and thrown objects of the
+/// actions, and the speech bubble.
+pub const CANVAS: Vec2 = vec2(72.0, 46.0);
 /// Width of Link's body box, in sprite pixels. His origin is its left edge.
 const BODY_WIDTH: f32 = 16.0;
 
@@ -91,7 +92,11 @@ enum Motion {
         speed: f32,
         /// Until this time, the pal runs in place.
         run_up_until: f64,
+        /// The walk follows the mouse pointer and ends with a catch.
+        chase: Option<Chase>,
     },
+    /// Asleep while the user is away.
+    Sleep,
     Fall {
         vy: f32,
     },
@@ -121,7 +126,40 @@ pub struct Pal {
     walk_distance: f32,
     /// The current hop, if any.
     hop: Option<Hop>,
+    /// True during the night hours of the settings.
+    night: bool,
+    /// The earliest time of the next chase of the mouse pointer.
+    next_chase: f64,
 }
+
+/// What the pal perceives in one frame.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Senses {
+    /// The mouse pointer, in screen points.
+    pub pointer: Option<Pos2>,
+    /// Time since the last input of the user.
+    pub idle: Option<std::time::Duration>,
+    /// True during the night hours.
+    pub night: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Chase {
+    until: f64,
+}
+
+/// Longest chase of the mouse pointer, in seconds.
+const CHASE_SECONDS: f64 = 6.0;
+/// Shortest time between two chases, in seconds.
+const CHASE_COOLDOWN: f64 = 30.0;
+/// Speed of a chase, as a factor of the walk speed.
+const CHASE_SPEED: f32 = 2.2;
+/// Horizontal distance of the pointer from Link that starts a chase, in sprite pixels.
+const CHASE_RANGE: (f32, f32) = (24.0, 160.0);
+/// Horizontal distance at which Link catches the pointer, in sprite pixels.
+const CATCH_DISTANCE: f32 = 14.0;
+/// Tint of the sprites during the night.
+const NIGHT_TINT: Color32 = Color32::from_rgb(160, 170, 235);
 
 /// A hop during a walk: Link leaves the ground, and his shadow stays on it.
 #[derive(Clone, Copy, Debug)]
@@ -154,6 +192,54 @@ impl Pal {
             facing: Dir::Down,
             walk_distance: 0.0,
             hop: None,
+            night: false,
+            next_chase: 0.0,
+        }
+    }
+
+    /// True if the pal can start a reaction now: he is on the ground and awake.
+    fn can_react(&self) -> bool {
+        !matches!(
+            self.motion,
+            Motion::Held | Motion::Fall { .. } | Motion::Sleep
+        )
+    }
+
+    /// Plays the action `name` at once, in the direction nearest to `dir`.
+    fn react(&mut self, name: &str, dir: Dir, now: f64, sprites: &Sprites) {
+        if let Some(action) = actions::find(name) {
+            if matches!(self.mood, Mood::Happy { .. }) {
+                self.mood = Mood::Calm;
+            }
+            self.play_dir(action, actions::dir_for(action, dir), now, sprites);
+        }
+    }
+
+    /// Reacts to a tool event of Claude with the item of the tool. A failed
+    /// tool interrupts the current action; a tool call waits for its end.
+    pub fn react_to_tool(&mut self, activity: &ToolActivity, now: f64, sprites: &Sprites) {
+        if !self.can_react() {
+            return;
+        }
+        let busy = matches!(self.motion, Motion::Act { .. });
+        let side = if fastrand::bool() {
+            Dir::Left
+        } else {
+            Dir::Right
+        };
+        match activity {
+            ToolActivity::Error => self.react(actions::TOOL_ERROR_REACTION, side, now, sprites),
+            ToolActivity::Use(tool) if !busy => {
+                self.react(actions::tool_reaction(tool), side, now, sprites)
+            }
+            ToolActivity::Use(_) => {}
+        }
+    }
+
+    /// Shows a level up: Link pulls the Master Sword and holds it up.
+    pub fn level_up(&mut self, now: f64, sprites: &Sprites) {
+        if self.can_react() {
+            self.react(actions::LEVEL_UP, Dir::Down, now, sprites);
         }
     }
 
@@ -169,7 +255,11 @@ impl Pal {
     }
 
     pub fn is_moving(&self) -> bool {
-        !matches!(self.motion, Motion::Stand { .. })
+        !matches!(self.motion, Motion::Stand { .. } | Motion::Sleep)
+    }
+
+    pub fn is_sleeping(&self) -> bool {
+        matches!(self.motion, Motion::Sleep)
     }
 
     pub fn hold(&mut self) {
@@ -201,7 +291,8 @@ impl Pal {
     }
 
     /// Advances the behavior by `dt` seconds. `may_move` is false while the pal
-    /// must stay calm: then no walk and no action starts.
+    /// must stay calm: then no walk, no chase and no action starts.
+    #[allow(clippy::too_many_arguments)]
     pub fn update(
         &mut self,
         now: f64,
@@ -210,11 +301,13 @@ impl Pal {
         cfg: &Config,
         sprites: &Sprites,
         may_move: bool,
+        senses: &Senses,
     ) {
         let size = Self::window_size(cfg.scale);
         let ground = area.bottom - size.y - cfg.bottom_margin;
         let min_x = area.left;
         let max_x = (area.right - size.x).max(min_x);
+        self.night = cfg.day_night && senses.night;
 
         if let Mood::Happy { until } = self.mood
             && now >= until
@@ -222,8 +315,25 @@ impl Pal {
             self.mood = Mood::Calm;
         }
 
+        // Sleep while the user is away, and wake up when the user returns.
+        let away = cfg.idle_sleep
+            && senses
+                .idle
+                .is_some_and(|d| d.as_secs_f32() >= cfg.idle_minutes * 60.0);
         match self.motion {
-            Motion::Held => return,
+            Motion::Sleep if !away => self.react(actions::WAKE_UP, Dir::Down, now, sprites),
+            Motion::Stand { .. } | Motion::Walk { .. } | Motion::Act { .. }
+                if away && self.mood != Mood::Thinking =>
+            {
+                self.motion = Motion::Sleep;
+                self.facing = Dir::Down;
+                self.hop = None;
+            }
+            _ => {}
+        }
+
+        match self.motion {
+            Motion::Held | Motion::Sleep => return,
             Motion::Fall { vy } => {
                 let gravity = cfg.gravity * PIXELS_PER_METER * cfg.scale as f32;
                 let vy = vy + gravity * dt;
@@ -239,7 +349,19 @@ impl Pal {
             }
             Motion::Stand { until } => {
                 self.walk_distance = 0.0;
-                if may_move && now >= until {
+                let chase_target = (may_move && cfg.chase && now >= self.next_chase)
+                    .then(|| self.pointer_target(senses.pointer, area, cfg))
+                    .flatten();
+                if let Some(target) = chase_target {
+                    self.motion = Motion::Walk {
+                        target,
+                        speed: CHASE_SPEED,
+                        run_up_until: now,
+                        chase: Some(Chase {
+                            until: now + CHASE_SECONDS,
+                        }),
+                    };
+                } else if may_move && now >= until {
                     let calm = self.mood == Mood::Calm;
                     if calm && cfg.actions && fastrand::f32() < cfg.action_chance {
                         self.start_action(now, sprites);
@@ -272,12 +394,38 @@ impl Pal {
                 }
             }
             Motion::Walk {
-                target,
+                mut target,
                 speed,
                 run_up_until,
+                chase,
             } => {
+                if let Some(c) = chase {
+                    // Follow the pointer; give up when it leaves the range or
+                    // after a while.
+                    match self.pointer_target(senses.pointer, area, cfg) {
+                        Some(t) if now < c.until && may_move => {
+                            target = t;
+                            if let Motion::Walk { target: old, .. } = &mut self.motion {
+                                *old = t;
+                            }
+                        }
+                        _ => {
+                            self.next_chase = now + CHASE_COOLDOWN;
+                            self.motion = Motion::Stand {
+                                until: now + pause(cfg),
+                            };
+                            return;
+                        }
+                    }
+                    let scale = cfg.scale as f32;
+                    if (target - self.pos.x).abs() <= CATCH_DISTANCE * scale {
+                        self.next_chase = now + CHASE_COOLDOWN;
+                        self.react(actions::CATCH, self.facing, now, sprites);
+                        return;
+                    }
+                }
                 let d = target - self.pos.x;
-                if !may_move || !cfg.walk {
+                if !may_move || !(cfg.walk || chase.is_some()) {
                     self.motion = Motion::Stand {
                         until: now + pause(cfg),
                     };
@@ -334,10 +482,14 @@ impl Pal {
 
     /// Starts a random action, or the action that `$PIXELPAL_ACTION` names. If
     /// the sprites lack a part of the action, the pal stands for one more second.
+    /// At night, the action comes from `actions::NIGHT_ACTIONS`.
     fn start_action(&mut self, now: f64, sprites: &Sprites) {
         let forced = std::env::var("PIXELPAL_ACTION").ok();
+        let night = actions::NIGHT_ACTIONS[fastrand::usize(..actions::NIGHT_ACTIONS.len())];
         let action = forced
-            .and_then(|name| ACTIONS.iter().find(|a| a.name == name))
+            .as_deref()
+            .and_then(actions::find)
+            .or_else(|| self.night.then(|| actions::find(night)).flatten())
             .unwrap_or_else(|| &ACTIONS[fastrand::usize(..ACTIONS.len())]);
         self.play(action, now, sprites);
     }
@@ -346,11 +498,11 @@ impl Pal {
     /// once and also while the chat panel is open. A held or falling pal does
     /// not react.
     pub fn poke(&mut self, now: f64, sprites: &Sprites) {
-        if matches!(self.motion, Motion::Held | Motion::Fall { .. }) {
+        if !self.can_react() {
             return;
         }
         let name = actions::REACTIONS[fastrand::usize(..actions::REACTIONS.len())];
-        if let Some(action) = ACTIONS.iter().find(|a| a.name == name) {
+        if let Some(action) = actions::find(name) {
             if matches!(self.mood, Mood::Happy { .. }) {
                 self.mood = Mood::Calm;
             }
@@ -359,7 +511,10 @@ impl Pal {
     }
 
     fn play(&mut self, action: &actions::Action, now: f64, sprites: &Sprites) {
-        let dir = actions::pick_dir(action);
+        self.play_dir(action, actions::pick_dir(action), now, sprites);
+    }
+
+    fn play_dir(&mut self, action: &actions::Action, dir: Dir, now: f64, sprites: &Sprites) {
         self.motion = match actions::scene(action, dir, sprites) {
             Some(shots) if !shots.is_empty() => {
                 self.facing = match dir {
@@ -376,12 +531,31 @@ impl Pal {
         };
     }
 
+    /// The window x at which Link stands just before the mouse pointer, if the
+    /// pointer is in the chase range: near the ground, beside Link, and not on him.
+    fn pointer_target(&self, pointer: Option<Pos2>, area: Area, cfg: &Config) -> Option<f32> {
+        let p = pointer?;
+        let scale = cfg.scale as f32;
+        let size = Self::window_size(cfg.scale);
+        let center = self.pos.x + size.x / 2.0;
+        let feet = self.pos.y + size.y;
+        let dx = p.x - center;
+        let near_ground = p.y >= feet - 60.0 * scale && p.y <= area.bottom + 4.0;
+        let in_range = dx.abs() >= CHASE_RANGE.0 * scale && dx.abs() <= CHASE_RANGE.1 * scale;
+        let chasing = matches!(self.motion, Motion::Walk { chase: Some(_), .. });
+        (near_ground && (in_range || (chasing && dx.abs() <= CHASE_RANGE.1 * scale)))
+            .then(|| p.x - size.x / 2.0 - dx.signum() * 6.0 * scale)
+    }
+
     fn start_walk(&mut self, now: f64, cfg: &Config, min_x: f32, max_x: f32, width: f32) {
         let lo = min_x + width;
         let hi = (max_x - width).max(lo);
         let target = lo + fastrand::f32() * (hi - lo);
         self.motion = if (target - self.pos.x).abs() >= MIN_WALK {
-            let gait = if cfg.vary_speed {
+            // At night, Link only strolls.
+            let gait = if self.night {
+                &GAITS[0]
+            } else if cfg.vary_speed {
                 random_gait()
             } else {
                 &GAITS[1]
@@ -390,6 +564,7 @@ impl Pal {
                 target,
                 speed: gait.speed,
                 run_up_until: now + gait.run_up,
+                chase: None,
             }
         } else {
             Motion::Stand {
@@ -398,30 +573,38 @@ impl Pal {
         };
     }
 
-    /// The animation, direction and frame to draw. `stride` is the walked
-    /// distance in sprite pixels for one frame of the walk cycle, so the walk
-    /// cycle advances with the distance and not with the time.
-    fn shot(&self, scale: f32, stride: f32, now: f64) -> (&'static str, Dir, usize) {
+    /// The frame to draw, with its prop. `stride` is the walked distance in
+    /// sprite pixels for one frame of the walk cycle, so the walk cycle
+    /// advances with the distance and not with the time.
+    fn shot(&self, scale: f32, stride: f32, now: f64) -> Shot {
+        let pose = |anim, dir, frame| Shot {
+            anim,
+            dir,
+            frame,
+            secs: 0.0,
+            prop: None,
+        };
         match (&self.motion, self.mood) {
             (Motion::Walk { .. }, _) => {
                 // Frames 1 to 8 of the walk strip are the walk cycle; frame 0 is
                 // the standing frame.
                 let i = (self.walk_distance / (stride.max(0.1) * scale)) as usize % 8;
-                ("walk", self.facing, 1 + i)
+                pose("walk", self.facing, 1 + i)
             }
-            (Motion::Held | Motion::Fall { .. }, _) => ("recoil", Dir::Down, 0),
-            (_, Mood::Happy { .. }) => ("item_get_two_hands", Dir::Down, 0),
+            (Motion::Held | Motion::Fall { .. }, _) => pose("recoil", Dir::Down, 0),
+            (Motion::Sleep, _) => pose("sleep_in_bed", Dir::Down, 0),
+            (_, Mood::Happy { .. }) => pose("item_get_two_hands", Dir::Down, 0),
             (Motion::Act { shots, start, .. }, _) => {
                 let mut t = (now - start) as f32;
                 for s in shots {
                     if t < s.secs {
-                        return (s.anim, s.dir, s.frame);
+                        return *s;
                     }
                     t -= s.secs;
                 }
-                ("walk", self.facing, 0)
+                pose("walk", self.facing, 0)
             }
-            (Motion::Stand { .. }, _) => ("walk", self.facing, 0),
+            (Motion::Stand { .. }, _) => pose("walk", self.facing, 0),
         }
     }
 
@@ -450,37 +633,46 @@ impl Pal {
         let body = ground.translate(vec2(0.0, -hop));
         let origin = pos2(body.left(), body.bottom() - sprites.feet * scale);
 
-        let (anim, dir, frame) = self.shot(scale, cfg.walk_stride, now);
+        let shot = self.shot(scale, cfg.walk_stride, now);
+        let tint = if self.night {
+            NIGHT_TINT
+        } else {
+            Color32::WHITE
+        };
+        // Draws frame `frame` of `clip` with the clip origin at `at`.
+        let draw = |clip: &Clip, frame: usize, at: Pos2| {
+            if let Some(texture) = clip.frames.get(frame).or(clip.frames.first()) {
+                painter.image(
+                    texture.id(),
+                    Rect::from_min_size((at - clip.origin * scale).round(), clip.size * scale),
+                    Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
+                    tint,
+                );
+            }
+        };
 
         // In the air, the shadow stays on the ground below Link.
         if hop > 0.0
-            && let Some(shadow) = sprites.shadow(dir)
+            && let Some(shadow) = sprites.shadow(shot.dir)
         {
             let ground_origin = pos2(ground.left(), ground.bottom() - sprites.feet * scale);
-            painter.image(
-                shadow.texture.id(),
-                Rect::from_min_size(
-                    (ground_origin - shadow.origin * scale).round(),
-                    shadow.size * scale,
-                ),
-                Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
-                Color32::WHITE,
-            );
+            draw(shadow, 0, ground_origin);
         }
-        let clip = sprites
-            .clip(anim, dir)
-            .or_else(|| sprites.clip("walk", Dir::Down));
-        if let Some(clip) = clip
-            && let Some(texture) = clip.frames.get(frame).or(clip.frames.first())
+        if let Some(clip) = sprites
+            .clip(shot.anim, shot.dir)
+            .or_else(|| sprites.clip("walk", Dir::Down))
         {
-            let sprite =
-                Rect::from_min_size((origin - clip.origin * scale).round(), clip.size * scale);
-            painter.image(
-                texture.id(),
-                sprite,
-                Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
-                Color32::WHITE,
-            );
+            draw(clip, shot.frame, origin);
+        }
+        if let Some(p) = shot.prop
+            && let Some(clip) = sprites.extra(p.extra)
+        {
+            draw(clip, p.frame, origin + vec2(p.at.0, p.at.1) * scale);
+        }
+        if (shot.anim, shot.frame) == ("sleep_in_bed", 0)
+            && let Some(zzz) = sprites.extra("zzz")
+        {
+            paint_zzz(&draw, zzz, origin, scale, now);
         }
 
         match self.mood {
@@ -488,6 +680,24 @@ impl Pal {
             Mood::Happy { .. } => paint_stars(painter, body, scale, now),
             Mood::Calm => {}
         }
+    }
+}
+
+/// The Zzz of a sleeping Link, as `Ancilla21_Snore` of the game draws them: a
+/// new Zzz every 32 game frames, rising 0.5 pixels per frame from beside his
+/// head and swaying, for 56 frames. All Zzz show the frame of the newest one,
+/// which grows from small to large in 16 frames.
+fn paint_zzz(draw: &impl Fn(&Clip, usize, Pos2), zzz: &Clip, origin: Pos2, scale: f32, now: f64) {
+    let frames = now * 60.0;
+    let newest = (frames % 32.0) as f32;
+    let frame = ((newest / 8.0) as usize).min(zzz.frames.len().saturating_sub(1));
+    for age in [newest, newest + 32.0] {
+        if age >= 56.0 {
+            continue;
+        }
+        let x = 16.0 + 2.5 * (age / 32.0 * TAU).sin();
+        let y = 4.0 - 0.5 * age;
+        draw(zzz, frame, origin + vec2(x, y) * scale);
     }
 }
 

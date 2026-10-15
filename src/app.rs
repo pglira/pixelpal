@@ -10,11 +10,12 @@ use std::time::{Duration, Instant};
 
 use crate::chat::{Chat, TurnEnd};
 use crate::link::Sprites;
-use crate::pal::{Area, Pal};
+use crate::pal::{Area, Pal, Senses};
+use crate::progress::Progress;
 use crate::settings::{Config, SettingsUi};
 use crate::theme;
 use crate::tray::{Tray, TrayCommand};
-use crate::workarea::X11;
+use crate::workarea::{PxRect, X11};
 
 /// Title of the pal window.
 pub const PAL_TITLE: &str = "pixelpal";
@@ -95,6 +96,10 @@ pub struct PalApp {
     sent_pos: Option<Pos2>,
     panel_resize: Option<PanelResize>,
     sent_scale: u32,
+    progress: Progress,
+    /// The last senses of the pal, and the time of their last full query.
+    senses: Senses,
+    senses_time: f64,
 }
 
 impl PalApp {
@@ -115,8 +120,16 @@ impl PalApp {
         let tray = Tray::spawn(cc.egui_ctx.clone(), w, h, &rgba)
             .map_err(|e| eprintln!("pixelpal: no tray icon: {e}"))
             .ok();
+        let progress = Progress::load();
+        settings_ui.progress = progress.summary();
+        let tier = if cfg.gear_progress {
+            progress.tier()
+        } else {
+            0
+        };
         Self {
-            sprites: Sprites::load(&cc.egui_ctx),
+            sprites: Sprites::load(&cc.egui_ctx, tier),
+            progress,
             pal: Pal::new(start),
             x11,
             area,
@@ -139,6 +152,8 @@ impl PalApp {
             sent_pos: None,
             panel_resize: None,
             sent_scale: cfg.scale,
+            senses: Senses::default(),
+            senses_time: f64::NEG_INFINITY,
             saved_cfg: cfg.clone(),
             cfg,
         }
@@ -177,6 +192,24 @@ impl PalApp {
                 bottom: m.y,
             };
         }
+    }
+
+    /// What the pal perceives now. The idle time and the hour are queried at
+    /// most once per second.
+    fn senses(&mut self, ctx: &egui::Context, now: f64) -> Senses {
+        if now - self.senses_time >= 1.0 {
+            self.senses_time = now;
+            self.senses.idle = self.x11.as_ref().and_then(X11::idle_time);
+            self.senses.night = self
+                .cfg
+                .is_night_hour(chrono::Timelike::hour(&chrono::Local::now()));
+        }
+        self.senses.pointer = if self.cfg.chase {
+            self.pointer(ctx)
+        } else {
+            None
+        };
+        self.senses
     }
 
     /// The global pointer position in points.
@@ -562,6 +595,23 @@ impl eframe::App for PalApp {
             self.manage_time = now;
             if let Some(x) = &self.x11 {
                 x.manage_windows(std::process::id(), PAL_TITLE);
+                // Only Link's body takes clicks; the rest of the pal window
+                // lets them through to the windows below.
+                if let Some(win) = x.find_window(std::process::id(), PAL_TITLE) {
+                    let scale = self.cfg.scale as f32;
+                    let ppp = Self::pixels_per_point(&ctx);
+                    let full = Rect::from_min_size(Pos2::ZERO, Pal::window_size(self.cfg.scale));
+                    let body = Pal::body(full, &self.sprites, scale).expand(2.0 * scale);
+                    x.set_input_rect(
+                        win,
+                        PxRect {
+                            x: (body.min.x * ppp).floor() as i32,
+                            y: (body.min.y * ppp).floor() as i32,
+                            w: (body.width() * ppp).ceil() as i32,
+                            h: (body.height() * ppp).ceil() as i32,
+                        },
+                    );
+                }
             }
         }
 
@@ -574,9 +624,32 @@ impl eframe::App for PalApp {
 
         // Pal mood from the chat.
         match self.chat.poll(&self.cfg) {
-            Some(TurnEnd::Success) => self.pal.celebrate(now),
+            Some(TurnEnd::Success) => {
+                self.progress.completed += 1;
+                self.progress.save();
+                self.settings_ui.progress = self.progress.summary();
+                self.pal.celebrate(now);
+            }
             Some(TurnEnd::Failure) => self.pal.set_thinking(false),
             None => self.pal.set_thinking(self.chat.is_running()),
+        }
+        // The gear follows the progress. A new, higher tier is a level up.
+        let tier = if self.cfg.gear_progress {
+            self.progress.tier().min(crate::link::tier_count() - 1)
+        } else {
+            0
+        };
+        if tier != self.sprites.tier {
+            let level_up = tier > self.sprites.tier && self.cfg.gear_progress;
+            self.sprites = Sprites::load(&ctx, tier);
+            if level_up {
+                self.pal.level_up(now, &self.sprites);
+            }
+        }
+        for activity in self.chat.take_tool_activity() {
+            if self.cfg.tool_reactions {
+                self.pal.react_to_tool(&activity, now, &self.sprites);
+            }
         }
 
         // Window size follows the scale.
@@ -592,8 +665,16 @@ impl eframe::App for PalApp {
         self.handle_input(ui, body);
 
         let may_move = !self.panel_open && !self.chat.is_running() && self.menu.is_none();
-        self.pal
-            .update(now, dt, self.area, &self.cfg, &self.sprites, may_move);
+        let senses = self.senses(&ctx, now);
+        self.pal.update(
+            now,
+            dt,
+            self.area,
+            &self.cfg,
+            &self.sprites,
+            may_move,
+            &senses,
+        );
 
         let pos = self.pal.pos.round();
         if self.sent_pos != Some(pos) {
@@ -632,8 +713,11 @@ impl eframe::App for PalApp {
         }
 
         let animating = self.pal.is_moving() || self.pal.mood != crate::pal::Mood::Calm;
+        // The Zzz of a sleeping pal need fewer frames than a walk.
         ctx.request_repaint_after(std::time::Duration::from_millis(if animating {
             16
+        } else if self.pal.is_sleeping() {
+            66
         } else {
             250
         }));

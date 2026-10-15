@@ -18,6 +18,9 @@ from PIL import Image, ImageDraw
 
 DIRECTIONS = ["up", "down", "left", "right"]
 
+# Names of the extra strips, by the extra id of extract.c (enum kExtra...).
+EXTRAS = ["skull", "rock", "bush", "skull_debris", "rock_debris", "bush_debris", "zzz"]
+
 HOLD = 0  # A duration of 0 means: the game holds this frame until an event.
 
 
@@ -126,9 +129,12 @@ def main():
 
     groups = {}
     shadows = []
+    extras = {}
     for p in poses:
-        if p["yt"] < 0:
+        if p["yt"] == -1:
             shadows.append(p)
+        elif p["yt"] == -2:
+            extras.setdefault(EXTRAS[p["dir"]], []).append(p)
         else:
             groups.setdefault((p["yt"], p["dir"]), []).append(p)
 
@@ -140,10 +146,31 @@ def main():
             "sequences: [frame index, duration in game frames]; duration 0 = hold until an event.",
             "same_as: the strip of another direction holds the identical frames.",
             "shadows: the ground shadow per direction; its origin is Link's coordinate point on the ground.",
+            "extras: objects and effects; the origin is the top-left corner of the object (or of the Zzz tile).",
         ],
         "animations": {},
         "shadows": {},
+        "extras": {},
     }
+    for name, frames in extras.items():
+        frames.sort(key=lambda f: f["rt"])
+        boxes = [b for b in (f["image"].getbbox() for f in frames) if b]
+        if not boxes:
+            continue
+        x0, y0 = min(b[0] for b in boxes), min(b[1] for b in boxes)
+        x1, y1 = max(b[2] for b in boxes), max(b[3] for b in boxes)
+        w, h = x1 - x0, y1 - y0
+        strip = Image.new("RGBA", (w * len(frames), h))
+        for i, f in enumerate(frames):
+            strip.paste(f["image"].crop((x0, y0, x1, y1)), (i * w, 0))
+        strip.save(out / f"{name}.png")
+        index["extras"][name] = {
+            "file": f"{name}.png",
+            "frames": len(frames),
+            "frame_width": w,
+            "frame_height": h,
+            "origin": [origin - x0, origin - y0],
+        }
     for s in shadows:
         box = s["image"].getbbox()
         if not box:

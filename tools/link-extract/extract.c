@@ -7,8 +7,8 @@
 //
 // Usage: extract <out.bin> [sword 0-4] [shield 0-3] [armor 0-2]
 //
-// Output: a header line, then one record per pose, then one shadow record
-// per direction with yt = -1:
+// Output: a header line, then one record per pose, one shadow record per
+// direction with yt = -1, and the extra records of WriteExtras() with yt = -2:
 //   int32 dir, yt, rt, r2; then POSE_SIZE * POSE_SIZE RGBA pixels.
 // Link's position (link_x_coord, link_y_coord) is at pixel (ORIGIN, ORIGIN).
 
@@ -247,6 +247,112 @@ static void RenderOam(uint32 *out) {
   }
 }
 
+// Extra strips: liftable objects, their debris, and the Zzz of a sleeping
+// Link. Each record has the animation type -2, the extra id as `dir`, and the
+// frame as `rt`. The origin of an object or debris frame is the top-left corner
+// of the object; the origin of a Zzz frame is the top-left corner of its tile.
+enum { kExtraSkull, kExtraRock, kExtraBush, kExtraSkullDebris, kExtraRockDebris,
+       kExtraBushDebris, kExtraZzz };
+
+// One 8x8 debris piece: offset from the object's top-left corner, tile, and
+// flips (1 = horizontal, 2 = vertical), from Garnish16_ThrownItemDebris().
+typedef struct DebrisPiece { int8 dx, dy; uint8 tile, flip; } DebrisPiece;
+
+static const DebrisPiece kShardDebris[8][4] = {
+  {{0, 0, 0x58, 2}, {8, 0, 0x58, 0}, {0, 8, 0x58, 2}, {8, 8, 0x58, 1}},
+  {{-2, 0, 0x58, 2}, {9, -1, 0x58, 1}, {-1, 10, 0x58, 2}, {9, 10, 0x58, 0}},
+  {{-4, 0, 0x58, 0}, {9, -3, 0x58, 3}, {-1, 11, 0x58, 0}, {10, 7, 0x58, 2}},
+  {{-6, 1, 0x58, 2}, {9, -4, 0x58, 1}, {-1, 12, 0x58, 2}, {12, 8, 0x58, 0}},
+  {{-7, 1, 0x48, 2}, {9, -4, 0x58, 3}, {-2, 13, 0x58, 0}, {13, 9, 0x58, 2}},
+  {{-9, 2, 0x48, 0}, {9, -4, 0x58, 0}, {-3, 16, 0x58, 2}, {14, 10, 0x48, 0}},
+  {{-4, 14, 0x48, 2}, {-4, 14, 0x48, 2}, {9, -4, 0x58, 2}, {15, 11, 0x48, 2}},
+  {{-3, 16, 0x48, 0}, {-3, 16, 0x48, 0}, {-3, 16, 0x48, 0}, {9, -1, 0x48, 0}},
+};
+
+static const DebrisPiece kBushDebris[8][4] = {
+  {{-4, 2, 0x59, 1}, {4, -5, 0x59, 1}, {6, 5, 0x59, 1}, {10, 1, 0x59, 0}},
+  {{-1, 3, 0x59, 1}, {4, -7, 0x59, 1}, {6, 8, 0x59, 1}, {7, 2, 0x59, 0}},
+  {{0, 4, 0x59, 1}, {2, -8, 0x59, 1}, {4, 4, 0x59, 0}, {7, 10, 0x59, 0}},
+  {{1, -9, 0x59, 2}, {1, 4, 0x59, 0}, {5, 4, 0x59, 1}, {7, 12, 0x59, 1}},
+  {{0, -10, 0x59, 1}, {-2, 4, 0x59, 0}, {8, 8, 0x59, 1}, {9, 14, 0x59, 1}},
+  {{-1, -12, 0x59, 1}, {-6, 4, 0x59, 1}, {9, 8, 0x59, 1}, {10, 15, 0x59, 1}},
+  {{-2, -15, 0x59, 1}, {-7, 3, 0x59, 1}, {12, 8, 0x59, 0}, {11, 17, 0x59, 0}},
+  {{-3, -17, 0x59, 1}, {-9, 1, 0x59, 0}, {4, 18, 0x59, 0}, {6, 15, 0x59, 0}},
+};
+
+static void ClearOam(void) {
+  for (int i = 0; i < 128; i++)
+    oam_buf[i].y = 0xf0;
+  memset(bytewise_extended_oam, 0, 128);
+}
+
+// Sets OAM entry `i` to a tile at an offset from the screen point of Link.
+static void PutTile(int i, int dx, int dy, uint16 charnum, bool big) {
+  WORD(oam_buf[i].charnum) = charnum;
+  oam_buf[i].x = SCREEN_POS + dx;
+  oam_buf[i].y = SCREEN_POS + dy;
+  bytewise_extended_oam[i] = big ? 2 : 0;
+}
+
+static void WriteRecord(FILE *f, uint32 *pixels, int id, int frame) {
+  RenderOam(pixels);
+  int32_t hdr[4] = { id, -2, frame, -1 };
+  fwrite(hdr, sizeof(int32_t), 4, f);
+  fwrite(pixels, POSE_SIZE * POSE_SIZE * 4, 1, f);
+}
+
+// Writes an object (palette 6) and its 8 debris frames. The game draws the
+// pieces from the last one to the first, so the last piece is on top.
+static void WriteObject(FILE *f, uint32 *pixels, int obj_id, uint8 tile,
+                        int debris_id, const DebrisPiece (*debris)[4]) {
+  ClearOam();
+  PutTile(0, 0, 0, 0x2c00 | tile, true);
+  WriteRecord(f, pixels, obj_id, 0);
+  for (int frame = 0; frame < 8; frame++) {
+    ClearOam();
+    for (int k = 0; k < 4; k++) {
+      const DebrisPiece *p = &debris[frame][k];
+      uint16 flips = (p->flip & 1 ? 0x4000 : 0) | (p->flip & 2 ? 0x8000 : 0);
+      PutTile(3 - k, p->dx, p->dy, 0x2c00 | p->tile | flips, false);
+    }
+    WriteRecord(f, pixels, debris_id, frame);
+  }
+}
+
+static void LoadSpritePalette6(void) {
+  memcpy(&main_palette_buffer[128 + 6 * 16], &aux_palette_buffer[128 + 6 * 16], 16 * sizeof(uint16));
+}
+
+static void WriteExtras(FILE *f, uint32 *pixels) {
+  // Indoors: the common sprite pack 10 holds the skull pot of the dungeons.
+  misc_sprites_graphics_index = 10;
+  LoadCommonSprites();
+  palette_sp6r_indoors = 10;
+  Palette_Load_SpriteEnvironment_Dungeon();
+  LoadSpritePalette6();
+  WriteObject(f, pixels, kExtraSkull, 0x44, kExtraSkullDebris, kShardDebris);
+
+  // Light world: the common sprite pack 1 holds the rock and the bush.
+  misc_sprites_graphics_index = 1;
+  LoadCommonSprites();
+  Palette_MiscSprite_Outdoors();
+  LoadSpritePalette6();
+  WriteObject(f, pixels, kExtraRock, 0x44, kExtraRockDebris, kShardDebris);
+  WriteObject(f, pixels, kExtraBush, 0x46, kExtraBushDebris, kBushDebris);
+
+  // The Zzz: tile 9, uploaded from the item graphics in 3 sizes.
+  static const uint8 kZzzDma[3] = { 0x44, 0x43, 0x42 };
+  for (int frame = 0; frame < 3; frame++) {
+    link_dma_var5 = kZzzDma[frame];
+    NMI_PrepareSprites();
+    nmi_disable_core_updates = 0;
+    NMI_DoUpdates();
+    ClearOam();
+    PutTile(0, 0, 0, 0x2409, false);
+    WriteRecord(f, pixels, kExtraZzz, frame);
+  }
+}
+
 int main(int argc, char **argv) {
   if (argc < 2) {
     fprintf(stderr, "usage: %s <out.bin> [sword 0-4] [shield 0-3] [armor 0-2]\n", argv[0]);
@@ -332,6 +438,8 @@ int main(int argc, char **argv) {
     fwrite(hdr, sizeof(hdr), 1, f);
     fwrite(pixels, sizeof(pixels), 1, f);
   }
+
+  WriteExtras(f, pixels);
   fclose(f);
   return 0;
 }

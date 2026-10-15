@@ -24,6 +24,13 @@ pub enum TurnEnd {
     Failure,
 }
 
+/// A tool event of the running turn, for the animation of the pal.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ToolActivity {
+    Use(String),
+    Error,
+}
+
 pub struct Chat {
     messages: Vec<Message>,
     input: String,
@@ -31,6 +38,8 @@ pub struct Chat {
     /// Working directory of the session. `--resume` only finds the session there.
     session_dir: Option<PathBuf>,
     run: Option<Run>,
+    /// Tool events since the last `take_tool_activity`.
+    tool_activity: Vec<ToolActivity>,
     cache: CommonMarkCache,
     /// The stored last chat, while the start question is open.
     question: Option<LastChat>,
@@ -48,6 +57,7 @@ impl Chat {
             session_id: None,
             session_dir: None,
             run: None,
+            tool_activity: Vec::new(),
             cache: CommonMarkCache::default(),
             question,
             focus_input: true,
@@ -66,6 +76,11 @@ impl Chat {
         self.focus_input = true;
     }
 
+    /// The tool events since the last call, oldest first.
+    pub fn take_tool_activity(&mut self) -> Vec<ToolActivity> {
+        std::mem::take(&mut self.tool_activity)
+    }
+
     /// Handles the events of the running prompt. Returns the end of the turn, if it ended.
     pub fn poll(&mut self, cfg: &Config) -> Option<TurnEnd> {
         let run = self.run.as_ref()?;
@@ -82,9 +97,12 @@ impl Chat {
                     _ if t.trim().is_empty() => {}
                     _ => self.messages.push(Message::new(Role::Assistant, t)),
                 },
-                Event::ToolUse(name) => self
-                    .messages
-                    .push(Message::new(Role::Note, format!("Tool: {name}"))),
+                Event::ToolUse(name) => {
+                    self.messages
+                        .push(Message::new(Role::Note, format!("Tool: {name}")));
+                    self.tool_activity.push(ToolActivity::Use(name));
+                }
+                Event::ToolError => self.tool_activity.push(ToolActivity::Error),
                 Event::Finished { error } => {
                     end = Some(match error {
                         Some(e) => {

@@ -8,8 +8,13 @@ A desktop pal for Linux. Link from *The Legend of Zelda: A Link to the Past* wal
 - Right click: menu with **Open chat**, **Settings…** and **Quit**.
 - Tray icon: a click opens or closes the chat. Its menu has **Hide pal** / **Show pal**, **Open or close the chat**, **Settings…** and **Quit**.
 - Between the walks, the pal plays random actions from the game: sword swings, the spin attack, swimming, the bow, the hammer, the bug net, the medallions, a fall into a pit (after which he drops from the top of the screen), sleep, and more. The list is `ACTIONS` in `src/actions.rs`.
-- While Claude works, the pal shows a "…" bubble. When the reply is complete, he holds up his arms.
-- Only Link's body reacts to the mouse. The rest of the pal window is empty space for the swords and items of the actions.
+- Link also finds rocks, skull pots and bushes: he lifts, carries and throws a rock or a skull, which breaks, and he cuts a bush with his sword.
+- While Claude works, the pal shows a "…" bubble, and each tool call of Claude gets an item of the game: he reads for `Read`/`Grep`/`Glob`, digs for `Edit`, uses the Cane of Somaria for `Write`, swings the hammer for `Bash`, the bug net for `WebSearch`, the hookshot for `WebFetch`, and the magic powder for `Task`. A failed tool gives him a shock. When the reply is complete, he holds up his arms.
+- Completed chats unlock better gear: the Master Sword (10 chats), the Blue Mail (30), the Tempered Sword and the Mirror Shield (75), the Golden Sword and the Red Mail (150). A new tier comes with a level up: Link pulls the Master Sword and holds it up. The count is in `~/.local/share/pixelpal/progress.json`.
+- At night (22:00 to 7:00 by default), Link is darker, strolls, and only dozes, sleeps, reads or prays.
+- When the mouse pointer comes near the ground beside Link, he runs to it and catches it with the bug net. After a catch, he waits 30 s before the next chase.
+- When you are away (no keyboard or mouse input for 5 minutes by default), Link sleeps with Zzz. When you return, he wakes up.
+- Only Link's body takes clicks. Clicks on the rest of the pal window, which is empty space for the swords, items and objects of the actions, go to the windows below.
 
 ## Requirements
 
@@ -25,15 +30,13 @@ A desktop pal for Linux. Link from *The Legend of Zelda: A Link to the Past* wal
 The graphics of Link belong to Nintendo. The repository does not contain them, and `.gitignore` excludes `assets/link/`. You extract them from your own copy of the game with `tools/link-extract`:
 
 1. Build [zelda3](https://github.com/snesrev/zelda3) with your ROM, as its README describes. This gives `zelda3_assets.dat` and the object files.
-2. Extract the animations into `assets/link/`:
+2. Extract the animations of all gear tiers into `assets/link/tier0` … `assets/link/tier4`:
 
    ```sh
-   tools/link-extract/build.sh <zelda3-dir> /tmp/link-extract
-   (cd <zelda3-dir> && /tmp/link-extract /tmp/poses.bin)
-   python3 tools/link-extract/pack.py /tmp/poses.bin assets/link
+   tools/link-extract/extract_all.sh <zelda3-dir> assets/link
    ```
 
-See `tools/link-extract/README.md` for the details and the output format. The build of pixelpal stops with a message if `assets/link/animations.json` is missing. The binary embeds the animations, so the installed binary needs no other files.
+See `tools/link-extract/README.md` for the details and the output format. The build of pixelpal stops with a message if `assets/link/tier0/animations.json` is missing. The binary embeds the animations, so the installed binary needs no other files.
 
 To see one action again and again, start pixelpal with `PIXELPAL_ACTION=<name>`, for example `PIXELPAL_ACTION=spin_attack cargo run --release`. The names are in `ACTIONS` in `src/actions.rs`.
 
@@ -81,6 +84,11 @@ The settings are in the text file `~/.config/pixelpal/config.toml` (TOML). The s
 |---|---|
 | Walk on the desktop | Turns the walking on or off. |
 | Hop while walking | Lets Link hop at random moments of a walk (about one hop in three seconds). The shadow of the game stays on the ground. The height follows the gravity setting. |
+| React to Claude's tools | Link uses an item for each tool call of Claude. |
+| Chase the mouse pointer | Link chases the pointer when it comes near the ground beside him. |
+| Day and night, night hours | Calm behavior and a darker Link during the night hours (local time). |
+| Sleep when you are away, minutes | Link sleeps after this time without keyboard or mouse input (XScreenSaver extension). |
+| Gear grows with chats | Completed chats unlock better gear. Off: Link keeps the Fighter's Sword. The window shows the count and the next tier. |
 | Play actions, action chance | Turns the random actions on or off, and sets the probability that an action follows a pause instead of a walk (default 50 %). |
 | Walk speed, pause between walks | Speed in px/s, and the random pause in seconds. |
 | Vary the walk speed | Each walk gets a random gait: a stroll (½ of the walk speed), a walk, a hurry (1.7×), or a Pegasus dash (3.5×) after a short run in place. |
@@ -112,9 +120,10 @@ The settings are in the text file `~/.config/pixelpal/config.toml` (TOML). The s
 | `src/main.rs` | Start position and window setup |
 | `src/app.rs` | The egui application: pal window, chat panel, menu, settings window |
 | `src/pal.rs` | Walking, falling, actions, animation states, speech bubble and stars |
-| `src/actions.rs` | The random actions, built from the playback sequences of the game |
-| `src/link.rs` | Loading of the embedded animations (`assets/link/`) |
-| `build.rs` | Embeds the files of `assets/link/` |
+| `src/actions.rs` | The actions and reactions, built from the playback sequences of the game, and the object scenes |
+| `src/link.rs` | Loading of the embedded animations of one gear tier (`assets/link/tier<N>/`) |
+| `src/progress.rs` | Completed chats and the gear tiers they unlock |
+| `build.rs` | Embeds the files of `assets/link/tier<N>/` |
 | `tools/link-extract/` | Extraction of the animations from the game |
 | `src/workarea.rs` | Usable screen area, pointer position and window states from X11 |
 | `src/theme.rs` | Colors and font of the chat panel |

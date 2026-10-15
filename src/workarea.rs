@@ -1,10 +1,12 @@
 //! Access to the X11 server: the usable area of a monitor, the pointer position,
+//! the idle time of the user,
 //! and the stacking of a window on top of all other windows.
 //!
 //! All values are in physical pixels of the X11 screen.
 
 use x11rb::connection::Connection;
 use x11rb::protocol::randr::ConnectionExt as _;
+use x11rb::protocol::screensaver::ConnectionExt as _;
 use x11rb::protocol::xproto::{
     Atom, AtomEnum, ClientMessageEvent, ConnectionExt as _, EventMask, Window,
 };
@@ -217,6 +219,37 @@ impl X11 {
     pub fn pointer(&self) -> Option<(i32, i32)> {
         let reply = self.conn.query_pointer(self.root).ok()?.reply().ok()?;
         Some((reply.root_x as i32, reply.root_y as i32))
+    }
+
+    /// Limits the input region of `win` to `rect`, in window coordinates:
+    /// clicks outside of it go to the windows below.
+    pub fn set_input_rect(&self, win: Window, rect: PxRect) {
+        use x11rb::protocol::shape::{ConnectionExt as _, SK, SO};
+        use x11rb::protocol::xproto::{ClipOrdering, Rectangle};
+        let r = Rectangle {
+            x: rect.x as i16,
+            y: rect.y as i16,
+            width: rect.w.max(1) as u16,
+            height: rect.h.max(1) as u16,
+        };
+        let _ =
+            self.conn
+                .shape_rectangles(SO::SET, SK::INPUT, ClipOrdering::UNSORTED, win, 0, 0, &[r]);
+        let _ = self.conn.flush();
+    }
+
+    /// Time since the last keyboard or mouse input, from the XScreenSaver
+    /// extension. `None` if the server lacks the extension.
+    pub fn idle_time(&self) -> Option<std::time::Duration> {
+        let reply = self
+            .conn
+            .screensaver_query_info(self.root)
+            .ok()?
+            .reply()
+            .ok()?;
+        Some(std::time::Duration::from_millis(
+            reply.ms_since_user_input as u64,
+        ))
     }
 
     fn monitors(&self) -> Vec<PxRect> {

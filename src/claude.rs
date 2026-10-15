@@ -31,6 +31,8 @@ pub enum Event {
     Text(String),
     /// Claude calls a tool.
     ToolUse(String),
+    /// A tool call failed.
+    ToolError,
     /// The turn ended. `error` holds a message if the turn failed.
     Finished { error: Option<String> },
 }
@@ -206,6 +208,17 @@ impl Parser {
                     }
                 }
             }
+            // Tool results come back in user messages.
+            Some("user") => {
+                let blocks = v.pointer("/message/content").and_then(Value::as_array);
+                let failed = blocks.into_iter().flatten().any(|b| {
+                    b.get("type").and_then(Value::as_str) == Some("tool_result")
+                        && b.get("is_error").and_then(Value::as_bool) == Some(true)
+                });
+                if failed {
+                    send(Event::ToolError);
+                }
+            }
             Some("result") => {
                 let is_error = v.get("is_error").and_then(Value::as_bool).unwrap_or(false)
                     || s("/subtype").is_some_and(|st| st != "success");
@@ -227,5 +240,30 @@ impl Parser {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    fn parse(lines: &[&str]) -> Vec<String> {
+        let events = RefCell::new(Vec::new());
+        let mut p = Parser::default();
+        for l in lines {
+            p.line(l, &|e| events.borrow_mut().push(format!("{e:?}")));
+        }
+        events.into_inner()
+    }
+
+    #[test]
+    fn reports_tool_use_and_tool_error() {
+        let ev = parse(&[
+            r#"{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","name":"Bash"}}}"#,
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","is_error":true,"content":"x"}]}}"#,
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","content":"ok"}]}}"#,
+        ]);
+        assert_eq!(ev, ["ToolUse(\"Bash\")", "ToolError"]);
     }
 }

@@ -51,6 +51,22 @@ pub struct Config {
     pub vary_speed: bool,
     /// Lets the pal hop at random moments of a walk.
     pub hops: bool,
+    /// Link's gear grows with the number of completed chats.
+    pub gear_progress: bool,
+    /// Link uses an item of the game for each tool call of Claude.
+    pub tool_reactions: bool,
+    /// Calm behavior and a night tint between `night_start` and `night_end`.
+    pub day_night: bool,
+    /// First hour of the night, 0 to 23, local time.
+    pub night_start: u32,
+    /// First hour of the day, 0 to 23, local time.
+    pub night_end: u32,
+    /// Link chases the mouse pointer when it comes near the ground beside him.
+    pub chase: bool,
+    /// Link sleeps while the user is away.
+    pub idle_sleep: bool,
+    /// Time without input after which the user counts as away, in minutes.
+    pub idle_minutes: f32,
     /// Walk speed in points per second.
     pub walk_speed: f32,
     /// Pause between two walks, in seconds.
@@ -87,6 +103,14 @@ impl Default for Config {
             action_chance: 0.5,
             vary_speed: true,
             hops: true,
+            gear_progress: true,
+            tool_reactions: true,
+            day_night: true,
+            night_start: 22,
+            night_end: 7,
+            chase: true,
+            idle_sleep: true,
+            idle_minutes: 5.0,
             walk_speed: 40.0,
             pause_min: 3.0,
             pause_max: 10.0,
@@ -111,6 +135,16 @@ impl Default for Config {
 }
 
 impl Config {
+    /// True if `hour` (0 to 23) is a night hour. A night can span midnight.
+    pub fn is_night_hour(&self, hour: u32) -> bool {
+        let (start, end) = (self.night_start % 24, self.night_end % 24);
+        if start <= end {
+            hour >= start && hour < end
+        } else {
+            hour >= start || hour < end
+        }
+    }
+
     fn path() -> Option<PathBuf> {
         Some(dirs::config_dir()?.join("pixelpal").join("config.toml"))
     }
@@ -226,6 +260,8 @@ pub struct SettingsUi {
     pub status: Option<String>,
     /// An error of the font file.
     pub font_error: Option<String>,
+    /// The progress of Link, as one line.
+    pub progress: String,
 }
 
 impl SettingsUi {
@@ -262,6 +298,36 @@ impl SettingsUi {
                     .on_hover_text("Link hops at random moments of a walk. His shadow stays on the ground.");
                 ui.checkbox(&mut cfg.hops, "");
                 ui.end_row();
+                ui.label("React to Claude's tools")
+                    .on_hover_text("Link reads for Read, digs for Edit, hammers for Bash, catches for WebSearch, and gets a shock when a tool fails.");
+                ui.checkbox(&mut cfg.tool_reactions, "");
+                ui.end_row();
+                ui.label("Chase the mouse pointer")
+                    .on_hover_text("When the pointer comes near the ground beside Link, he runs to it and catches it with the bug net.");
+                ui.checkbox(&mut cfg.chase, "");
+                ui.end_row();
+                ui.label("Day and night")
+                    .on_hover_text("At night, Link is darker, strolls, and only dozes, sleeps, reads or prays.");
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut cfg.day_night, "");
+                    ui.add_enabled_ui(cfg.day_night, |ui| {
+                        ui.label("night from");
+                        ui.add(DragValue::new(&mut cfg.night_start).range(0..=23).suffix(":00"));
+                        ui.label("to");
+                        ui.add(DragValue::new(&mut cfg.night_end).range(0..=23).suffix(":00"));
+                    });
+                });
+                ui.end_row();
+                ui.label("Sleep when you are away")
+                    .on_hover_text("Link sleeps after this time without keyboard or mouse input, and wakes up when you return.");
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut cfg.idle_sleep, "");
+                    ui.add_enabled(
+                        cfg.idle_sleep,
+                        DragValue::new(&mut cfg.idle_minutes).range(0.5..=240.0).speed(0.1).suffix(" min"),
+                    );
+                });
+                ui.end_row();
                 ui.label("Pause between walks");
                 ui.horizontal(|ui| {
                     ui.add(DragValue::new(&mut cfg.pause_min).range(0.0..=600.0).speed(0.2).suffix(" s"));
@@ -286,6 +352,13 @@ impl SettingsUi {
                 ui.end_row();
                 ui.label("Bottom margin");
                 ui.add(DragValue::new(&mut cfg.bottom_margin).range(0.0..=500.0).suffix(" px"));
+                ui.end_row();
+                ui.label("Gear grows with chats")
+                    .on_hover_text("Completed chats unlock the Master Sword, the Blue Mail, the Tempered Sword and the Golden Sword.");
+                ui.vertical(|ui| {
+                    ui.checkbox(&mut cfg.gear_progress, "");
+                    ui.label(&self.progress);
+                });
                 ui.end_row();
             });
 
@@ -471,5 +544,23 @@ impl SettingsUi {
                 ui.label(RichText::new(format!("Settings file: {}", p.display())).weak().small());
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn night_hours_span_midnight() {
+        let cfg = Config::default();
+        assert!(cfg.is_night_hour(23) && cfg.is_night_hour(0) && cfg.is_night_hour(6));
+        assert!(!cfg.is_night_hour(7) && !cfg.is_night_hour(12) && !cfg.is_night_hour(21));
+        let day = Config {
+            night_start: 1,
+            night_end: 5,
+            ..Config::default()
+        };
+        assert!(day.is_night_hour(1) && day.is_night_hour(4) && !day.is_night_hour(5));
     }
 }
