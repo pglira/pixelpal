@@ -49,18 +49,14 @@ struct Edges {
     top: bool,
 }
 
-enum ResizeEvent {
-    Start(Edges),
-    Drag,
-    Stop,
-}
-
 /// A running resize drag of the chat panel.
 struct PanelResize {
     edges: Edges,
     /// Global pointer position at the start of the drag, in points.
     start: Pos2,
     start_size: Vec2,
+    /// The X11 window of the chat panel.
+    window: Option<u32>,
 }
 
 pub struct PalApp {
@@ -283,18 +279,25 @@ impl PalApp {
         }
     }
 
-    fn show_panel(&mut self, ctx: &egui::Context) {
+    /// The place of the chat panel on the screen: centered above the pal,
+    /// inside the area.
+    fn panel_rect(&self) -> Rect {
         let size = vec2(self.cfg.panel_width, self.cfg.panel_height);
         let pal_size = Pal::window_size(self.cfg.scale);
         let a = self.area;
         let x = (self.pal.pos.x + pal_size.x / 2.0 - size.x / 2.0)
             .clamp(a.left, (a.right - size.x).max(a.left));
         let y = (self.pal.pos.y - size.y - 4.0).max(a.top);
+        Rect::from_min_size(pos2(x, y).round(), size)
+    }
+
+    fn show_panel(&mut self, ctx: &egui::Context) {
+        let rect = self.panel_rect();
         let builder = ViewportBuilder::default()
             .with_title(CHAT_TITLE)
             .with_transparent(true)
-            .with_position(pos2(x, y).round())
-            .with_inner_size(size)
+            .with_position(rect.min)
+            .with_inner_size(rect.size())
             .with_decorations(false)
             .with_always_on_top()
             .with_taskbar(false)
@@ -328,46 +331,71 @@ impl PalApp {
     /// centered above the pal, so a side edge changes the width on both sides.
     /// The new size goes into the configuration, and into the settings draft at
     /// the end of the drag.
-    fn handle_panel_resize(&mut self, ctx: &egui::Context, event: Option<ResizeEvent>) {
-        match event {
-            Some(ResizeEvent::Start(edges)) => {
-                if let Some(start) = self.pointer(ctx) {
-                    self.panel_resize = Some(PanelResize {
-                        edges,
-                        start,
-                        start_size: vec2(self.cfg.panel_width, self.cfg.panel_height),
-                    });
-                }
+    ///
+    /// egui only starts the drag. Then each frame reads the pointer and the
+    /// left mouse button from X11, so that the drag continues when the pointer
+    /// leaves the panel before the panel grows, and ends when the button is up.
+    fn handle_panel_resize(&mut self, ctx: &egui::Context, started: Option<Edges>) {
+        if let Some(edges) = started
+            && let Some(start) = self.pointer(ctx)
+        {
+            self.panel_resize = Some(PanelResize {
+                edges,
+                start,
+                start_size: vec2(self.cfg.panel_width, self.cfg.panel_height),
+                window: self
+                    .x11
+                    .as_ref()
+                    .and_then(|x| x.find_window(std::process::id(), CHAT_TITLE)),
+            });
+        }
+        let Some(r) = &self.panel_resize else {
+            return;
+        };
+        let ppp = Self::pixels_per_point(ctx);
+        let state = self.x11.as_ref().and_then(|x| x.pointer_and_button());
+        let Some((px, py, true)) = state else {
+            self.panel_resize = None;
+            if let Some(d) = &mut self.settings_draft {
+                d.panel_width = self.cfg.panel_width;
+                d.panel_height = self.cfg.panel_height;
             }
-            Some(ResizeEvent::Drag) => {
-                let (Some(r), Some(p)) = (&self.panel_resize, self.pointer(ctx)) else {
-                    return;
-                };
-                let d = p - r.start;
-                let mut size = r.start_size;
-                if r.edges.right {
-                    size.x += 2.0 * d.x;
-                }
-                if r.edges.left {
-                    size.x -= 2.0 * d.x;
-                }
-                if r.edges.top {
-                    size.y -= d.y;
-                }
-                let a = self.area;
-                let max = vec2(a.right - a.left, a.bottom - a.top).max(PANEL_MIN);
-                let size = size.clamp(PANEL_MIN, max).round();
-                self.cfg.panel_width = size.x;
-                self.cfg.panel_height = size.y;
-            }
-            Some(ResizeEvent::Stop) => {
-                self.panel_resize = None;
-                if let Some(d) = &mut self.settings_draft {
-                    d.panel_width = self.cfg.panel_width;
-                    d.panel_height = self.cfg.panel_height;
-                }
-            }
-            None => {}
+            return;
+        };
+        let d = pos2(px as f32 / ppp, py as f32 / ppp) - r.start;
+        let mut size = r.start_size;
+        if r.edges.right {
+            size.x += 2.0 * d.x;
+        }
+        if r.edges.left {
+            size.x -= 2.0 * d.x;
+        }
+        if r.edges.top {
+            size.y -= d.y;
+        }
+        let a = self.area;
+        let max = vec2(a.right - a.left, a.bottom - a.top).max(PANEL_MIN);
+        let size = size.clamp(PANEL_MIN, max).round();
+        let window = r.window;
+        ctx.request_repaint();
+        if size == vec2(self.cfg.panel_width, self.cfg.panel_height) {
+            return;
+        }
+        self.cfg.panel_width = size.x;
+        self.cfg.panel_height = size.y;
+        // The window takes the new size and position at once and in one
+        // request, not with the next frame of the panel.
+        if let (Some(x), Some(win)) = (&self.x11, window) {
+            let rect = self.panel_rect();
+            x.move_resize(
+                win,
+                PxRect {
+                    x: (rect.min.x * ppp).round() as i32,
+                    y: (rect.min.y * ppp).round() as i32,
+                    w: (rect.width() * ppp).round() as i32,
+                    h: (rect.height() * ppp).round() as i32,
+                },
+            );
         }
     }
 
@@ -821,8 +849,8 @@ impl eframe::App for PalApp {
 }
 
 /// Resize zones at the top edge, the side edges and the top corners of the chat
-/// panel `full`. Returns the resize event of this frame.
-fn resize_zones(ui: &mut Ui, full: Rect) -> Option<ResizeEvent> {
+/// panel `full`. Returns the edges of a resize drag that starts in this frame.
+fn resize_zones(ui: &mut Ui, full: Rect) -> Option<Edges> {
     use egui::CursorIcon;
     let (l, r, t) = (full.left(), full.right(), full.top());
     let edges = |left, right, top| Edges { left, right, top };
@@ -854,19 +882,15 @@ fn resize_zones(ui: &mut Ui, full: Rect) -> Option<ResizeEvent> {
             CursorIcon::ResizeNorthEast,
         ),
     ];
-    let mut event = None;
+    let mut start = None;
     for (i, (rect, e, icon)) in zones.into_iter().enumerate() {
         let resp = ui.interact(rect, Id::new(("panel_resize", i)), Sense::drag());
         if resp.hovered() || resp.dragged() {
             ui.ctx().set_cursor_icon(icon);
         }
         if resp.drag_started() {
-            event = Some(ResizeEvent::Start(e));
-        } else if resp.drag_stopped() {
-            event = Some(ResizeEvent::Stop);
-        } else if resp.dragged() && event.is_none() {
-            event = Some(ResizeEvent::Drag);
+            start = Some(e);
         }
     }
-    event
+    start
 }

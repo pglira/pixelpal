@@ -236,8 +236,16 @@ impl X11 {
 
     /// The global position of the mouse pointer.
     pub fn pointer(&self) -> Option<(i32, i32)> {
+        self.pointer_and_button().map(|(x, y, _)| (x, y))
+    }
+
+    /// The pointer position on the screen, in physical pixels, and whether
+    /// the left mouse button is down.
+    pub fn pointer_and_button(&self) -> Option<(i32, i32, bool)> {
+        use x11rb::protocol::xproto::KeyButMask;
         let reply = self.conn.query_pointer(self.root).ok()?.reply().ok()?;
-        Some((reply.root_x as i32, reply.root_y as i32))
+        let left = reply.mask.contains(KeyButMask::BUTTON1);
+        Some((reply.root_x as i32, reply.root_y as i32, left))
     }
 
     /// Limits the input region of `win` to `rect`, in window coordinates:
@@ -254,6 +262,19 @@ impl X11 {
         let _ =
             self.conn
                 .shape_rectangles(SO::SET, SK::INPUT, ClipOrdering::UNSORTED, win, 0, 0, &[r]);
+        let _ = self.conn.flush();
+    }
+
+    /// Moves and resizes the window `win` in one request, so that the window
+    /// manager applies the position and the size together.
+    pub fn move_resize(&self, win: Window, rect: PxRect) {
+        use x11rb::protocol::xproto::ConfigureWindowAux;
+        let aux = ConfigureWindowAux::new()
+            .x(rect.x)
+            .y(rect.y)
+            .width(rect.w.max(1) as u32)
+            .height(rect.h.max(1) as u32);
+        let _ = self.conn.configure_window(win, &aux);
         let _ = self.conn.flush();
     }
 
