@@ -9,6 +9,7 @@ mod enemy;
 mod files;
 mod history;
 mod link;
+mod markdown;
 mod pal;
 mod picker;
 mod progress;

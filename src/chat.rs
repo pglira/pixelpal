@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use egui::{Align, Color32, ComboBox, Frame, Id, Key, Layout, Margin, Modifiers, RichText, Ui};
-use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
+use egui_commonmark::CommonMarkCache;
 
 use crate::claude::{Event, Request, Run};
 use crate::history::{LastChat, Message, Role};
@@ -315,7 +315,7 @@ impl Chat {
                             }
                             Role::Assistant => {
                                 ui.push_id(i, |ui| {
-                                    CommonMarkViewer::new().show(ui, &mut self.cache, &m.text);
+                                    crate::markdown::show(ui, &mut self.cache, &m.text);
                                 });
                             }
                             Role::Note => {
