@@ -7,10 +7,14 @@
 # PREFIX defaults to ~/.local, DATA_DIR to $XDG_DATA_HOME or ~/.local/share.
 #
 # Usage: ./install.sh              build and install
+#        ./install.sh <rom-file>   build, install and import the ROM
 #        ./install.sh --uninstall  remove the installed files
 #
-# The settings (~/.config/pixelpal) and the last chat (~/.local/share/pixelpal)
-# are never removed.
+# pixelpal draws Link from the ROM of A Link to the Past (USA). Without a
+# stored ROM, the binary asks for the ROM file when the script writes the icon.
+#
+# The settings (~/.config/pixelpal), the last chat and the stored ROM
+# (~/.local/share/pixelpal) are never removed.
 
 set -eu
 
@@ -37,14 +41,12 @@ if [ "${1:-}" = "--uninstall" ]; then
     exit 0
 fi
 
-if [ ! -f assets/link/tier0/animations.json ]; then
-    echo "assets/link/tier0/animations.json is missing. See README.md, section \"Animations\"." >&2
-    exit 1
-fi
-
 cargo build --release
 
 install -Dm755 target/release/pixelpal "$BIN"
+if [ $# -gt 0 ]; then
+    "$BIN" --import-rom "$1"
+fi
 mkdir -p "$(dirname "$ICON")"
 "$BIN" --write-icon "$ICON"
 mkdir -p "$(dirname "$DESKTOP")"

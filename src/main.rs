@@ -11,6 +11,7 @@ mod link;
 mod pal;
 mod picker;
 mod progress;
+mod rom;
 mod settings;
 mod theme;
 mod tray;
@@ -23,9 +24,33 @@ use crate::settings::Config;
 use crate::workarea::X11;
 
 fn main() -> eframe::Result {
-    // `pixelpal --write-icon <file.png>` writes the application icon and exits.
     let args: Vec<String> = std::env::args().collect();
-    if args.get(1).map(String::as_str) == Some("--write-icon") {
+    let option = args.get(1).map(String::as_str);
+
+    // `pixelpal --import-rom <file>` checks and stores the ROM and exits.
+    if option == Some("--import-rom") {
+        let Some(path) = args.get(2) else {
+            eprintln!("usage: pixelpal --import-rom <file>");
+            std::process::exit(2);
+        };
+        match rom::import(std::path::Path::new(path)) {
+            Ok(_) => println!("pixelpal: the ROM is imported."),
+            Err(e) => {
+                eprintln!("pixelpal: {e}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+
+    // All graphics come from the ROM. Without it, pixelpal asks for the file.
+    if let Err(e) = rom::obtain().and_then(|data| link::init(&data)) {
+        eprintln!("pixelpal: {e}");
+        std::process::exit(1);
+    }
+
+    // `pixelpal --write-icon <file.png>` writes the application icon and exits.
+    if option == Some("--write-icon") {
         let Some(path) = args.get(2) else {
             eprintln!("usage: pixelpal --write-icon <file.png>");
             std::process::exit(2);

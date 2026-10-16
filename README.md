@@ -22,21 +22,27 @@ A desktop pal for Linux. Link from *The Legend of Zelda: A Link to the Past* wal
 - A panel with a StatusNotifierItem tray, for the tray icon (on XFCE: the "Status Tray" plugin).
 - A compositor, for the transparent window. On XFCE: Settings → Window Manager Tweaks → Compositor → Enable display compositing.
 - Rust 1.95 or newer.
-- Optional: `zenity` or `kdialog`, for the **Browse…** buttons of the settings. Without them, type the path.
+- The ROM of *A Link to the Past* (USA). See [The ROM](#the-rom).
+- Optional: `zenity` or `kdialog`, for the ROM dialog at the first start and for the **Browse…** buttons of the settings. Without them, use `pixelpal --import-rom <file>` and type the paths.
 - Claude Code (`claude`), logged in.
 
-## Animations
+## The ROM
 
-The graphics of Link belong to Nintendo. The repository does not contain them, and `.gitignore` excludes `assets/link/`. You extract them from your own copy of the game with `tools/link-extract`:
+The graphics of Link belong to Nintendo. pixelpal does not contain them: it draws them at start from your own ROM of *The Legend of Zelda: A Link to the Past* (USA). The ROM must have this SHA-1 (without a copier header):
 
-1. Build [zelda3](https://github.com/snesrev/zelda3) with your ROM, as its README describes. This gives `zelda3_assets.dat` and the object files.
-2. Extract the animations of all gear tiers into `assets/link/tier0` … `assets/link/tier4`:
+```
+6d4f10a8b10e10dbe624cb23cf03b88bb8252973
+```
 
-   ```sh
-   tools/link-extract/extract_all.sh <zelda3-dir> assets/link
-   ```
+At the first start, pixelpal opens a file dialog for the ROM. It checks the size and the SHA-1, removes a copier header of 512 bytes, and stores a copy as `~/.local/share/pixelpal/zelda3.sfc`. If the check fails, the dialog opens again. Without `zenity` or `kdialog`, import the ROM on the command line:
 
-See `tools/link-extract/README.md` for the details and the output format. The build of pixelpal stops with a message if `assets/link/tier0/animations.json` is missing. The binary embeds the animations, so the installed binary needs no other files.
+```sh
+pixelpal --import-rom <file>
+```
+
+`assets/link.json` is the sprite recipe. It holds no graphics: for each 8×8 tile of each pose it names the place of the pixels and the colors in the ROM, and the position of the tile. It also holds the frame sizes and the playback sequences. `tools/link-extract` makes the recipe with the drawing code of [zelda3](https://github.com/snesrev/zelda3); see `tools/link-extract/README.md`. You need zelda3 only to change the recipe.
+
+The tests draw the strips too. They use the stored ROM, or the ROM file in `PIXELPAL_ROM`: `PIXELPAL_ROM=<file> cargo test --release`.
 
 To see one action again and again, start pixelpal with `PIXELPAL_ACTION=<name>`, for example `PIXELPAL_ACTION=spin_attack cargo run --release`. The names are in `ACTIONS` in `src/actions.rs`.
 
@@ -54,7 +60,9 @@ The script builds the release binary and installs, for the current user:
 | `~/.local/share/icons/hicolor/96x96/apps/pixelpal.png` | the icon |
 | `~/.local/share/applications/pixelpal.desktop` | the desktop file (application menu entry) |
 
-`PREFIX` changes the directory of the binary, and `XDG_DATA_HOME` the directory of the icon and the desktop file. `./install.sh --uninstall` removes these files. It keeps the settings and the last chat.
+`PREFIX` changes the directory of the binary, and `XDG_DATA_HOME` the directory of the icon and the desktop file. `./install.sh --uninstall` removes these files. It keeps the settings, the last chat and the stored ROM.
+
+To import the ROM during the installation, give its path: `./install.sh <rom-file>`. Otherwise, the script asks for the ROM when it writes the icon.
 
 To run pixelpal without installation:
 
@@ -136,11 +144,11 @@ pixelpal repaints only when Link changes, and it polls X11 at most once per seco
 | `src/app.rs` | The egui application: pal window, chat panel, menu, settings window |
 | `src/pal.rs` | Walking, falling, actions, animation states, speech bubble and stars |
 | `src/actions.rs` | The actions and reactions, built from the playback sequences of the game, and the object scenes |
-| `src/link.rs` | Loading of the embedded animations of one gear tier (`assets/link/tier<N>/`) |
+| `src/link.rs` | The strips of one gear tier, drawn from the ROM with the sprite recipe `assets/link.json` |
+| `src/rom.rs` | Check, import and file dialog of the ROM |
 | `src/progress.rs` | Completed chats and the gear tiers they unlock |
 | `src/picker.rs` | File and folder dialogs through `zenity` or `kdialog` |
-| `build.rs` | Embeds the files of `assets/link/tier<N>/` |
-| `tools/link-extract/` | Extraction of the animations from the game |
+| `tools/link-extract/` | Makes the sprite recipe with the drawing code of zelda3 |
 | `src/workarea.rs` | Usable screen area, pointer position and window states from X11 |
 | `src/theme.rs` | Colors and font of the chat panel |
 | `src/tray.rs` | Tray icon (StatusNotifierItem) and its menu |

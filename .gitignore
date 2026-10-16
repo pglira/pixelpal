@@ -1,7 +1,11 @@
 /target
 # The graphics of Link are copyrighted by Nintendo and are never committed:
-# the animations that tools/link-extract writes, and any sprite sheet.
+# rendered poses, previews, sprite sheets and ROM files. The sprite recipe
+# assets/link.json holds no graphics.
 /assets/link/
 /assets/link_sheet.png
+*.sfc
+*.smc
 # Plan reports for the Galley review app.
 /.galley/
+__pycache__/

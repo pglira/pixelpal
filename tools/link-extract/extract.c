@@ -9,7 +9,8 @@
 //
 // Output: a header line, then one record per pose, one shadow record per
 // direction with yt = -1, and the extra records of WriteExtras() with yt = -2:
-//   int32 dir, yt, rt, r2; then POSE_SIZE * POSE_SIZE RGBA pixels.
+//   int32 dir, yt, rt, r2; POSE_SIZE * POSE_SIZE RGBA pixels; int32 n; then
+//   n TileLog entries, one per drawn 8x8 tile, in drawing order.
 // Link's position (link_x_coord, link_y_coord) is at pixel (ORIGIN, ORIGIN).
 
 #include "src/player_oam.c"
@@ -203,9 +204,23 @@ static uint32 Bgr555ToRgba(uint16 c) {
   return r | g << 8 | b << 16 | 0xffu << 24;
 }
 
-// Draws one 8x8 tile of the object name table into `out`.
+// One drawn 8x8 tile: its position in the pose, the flips (1 = horizontal,
+// 2 = vertical), its 4bpp data in SNES format, and its 16 palette colors.
+typedef struct TileLog {
+  int16 x, y;
+  uint8 flags, pad[3];
+  uint16 data[16];
+  uint16 colors[16];
+} TileLog;
+
+static TileLog g_tiles[1024];
+static int g_num_tiles;
+
+// Draws one 8x8 tile of the object name table into `out`, and logs it to
+// g_tiles if it has an opaque pixel inside the pose.
 static void DrawTile(uint32 *out, int tile, int px, int py, int pal, bool hflip, bool vflip) {
   const uint16 *t = &g_zenv.vram[0x4000 + (tile & 0x1ff) * 16];
+  bool drawn = false;
   for (int y = 0; y < 8; y++) {
     int row = vflip ? 7 - y : y;
     uint16 p01 = t[row], p23 = t[row + 8];
@@ -214,15 +229,36 @@ static void DrawTile(uint32 *out, int tile, int px, int py, int pal, bool hflip,
       int c = (p01 >> bit & 1) | (p01 >> (bit + 8) & 1) << 1 |
               (p23 >> bit & 1) << 2 | (p23 >> (bit + 8) & 1) << 3;
       int ox = px + x, oy = py + y;
-      if (c && ox >= 0 && oy >= 0 && ox < POSE_SIZE && oy < POSE_SIZE)
+      if (c && ox >= 0 && oy >= 0 && ox < POSE_SIZE && oy < POSE_SIZE) {
         out[oy * POSE_SIZE + ox] = Bgr555ToRgba(main_palette_buffer[128 + pal * 16 + c]);
+        drawn = true;
+      }
     }
   }
+  if (drawn && g_num_tiles < 1024) {
+    TileLog *l = &g_tiles[g_num_tiles++];
+    memset(l, 0, sizeof(*l));
+    l->x = px, l->y = py;
+    l->flags = hflip | vflip << 1;
+    memcpy(l->data, t, 32);
+    memcpy(l->colors, &main_palette_buffer[128 + pal * 16], 32);
+  }
+}
+
+// Writes a record: the header, the pixels, and the tiles of g_tiles in
+// drawing order.
+static void WritePose(FILE *f, int32_t hdr[4], uint32 *pixels) {
+  fwrite(hdr, sizeof(int32_t), 4, f);
+  fwrite(pixels, POSE_SIZE * POSE_SIZE * 4, 1, f);
+  int32_t n = g_num_tiles;
+  fwrite(&n, sizeof(n), 1, f);
+  fwrite(g_tiles, sizeof(TileLog), n, f);
 }
 
 // Draws the OAM entries in hardware priority order: a lower index is on top.
 static void RenderOam(uint32 *out) {
   memset(out, 0, POSE_SIZE * POSE_SIZE * 4);
+  g_num_tiles = 0;
   for (int i = 127; i >= 0; i--) {
     OamEnt *e = &oam_buf[i];
     if (e->y == 0xf0)
@@ -297,8 +333,7 @@ static void PutTile(int i, int dx, int dy, uint16 charnum, bool big) {
 static void WriteRecord(FILE *f, uint32 *pixels, int id, int frame) {
   RenderOam(pixels);
   int32_t hdr[4] = { id, -2, frame, -1 };
-  fwrite(hdr, sizeof(int32_t), 4, f);
-  fwrite(pixels, POSE_SIZE * POSE_SIZE * 4, 1, f);
+  WritePose(f, hdr, pixels);
 }
 
 // Writes an object (palette 6) and its 8 debris frames. The game draws the
@@ -421,8 +456,7 @@ int main(int argc, char **argv) {
         NMI_DoUpdates();
         RenderOam(pixels);
         int32_t hdr[4] = { dir, yt, rt, start + rt };
-        fwrite(hdr, sizeof(hdr), 1, f);
-        fwrite(pixels, sizeof(pixels), 1, f);
+        WritePose(f, hdr, pixels);
       }
     }
   }
@@ -435,8 +469,7 @@ int main(int argc, char **argv) {
     DrawShadow(dir);
     RenderOam(pixels);
     int32_t hdr[4] = { dir, -1, 0, -1 };
-    fwrite(hdr, sizeof(hdr), 1, f);
-    fwrite(pixels, sizeof(pixels), 1, f);
+    WritePose(f, hdr, pixels);
   }
 
   WriteExtras(f, pixels);
