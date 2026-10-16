@@ -28,8 +28,10 @@ const MIN_WALK: f32 = 24.0;
 struct Gait {
     speed: f32,
     weight: u32,
-    /// Seconds of running in place before the walk, as with the Pegasus Boots.
+    /// Seconds of running in place before the walk, as with the Pegasus Shoes.
     run_up: f64,
+    /// Link holds his sword forward, as in a dash with the Pegasus Shoes.
+    sword: bool,
 }
 
 static GAITS: [Gait; 4] = [
@@ -38,24 +40,28 @@ static GAITS: [Gait; 4] = [
         speed: 0.5,
         weight: 25,
         run_up: 0.0,
+        sword: false,
     },
     // Walk.
     Gait {
         speed: 1.0,
         weight: 40,
         run_up: 0.0,
+        sword: false,
     },
     // Hurry.
     Gait {
         speed: 1.7,
         weight: 25,
         run_up: 0.0,
+        sword: false,
     },
-    // Dash with the Pegasus Boots.
+    // Dash with the Pegasus Shoes.
     Gait {
         speed: 3.5,
         weight: 10,
         run_up: 0.5,
+        sword: true,
     },
 ];
 
@@ -92,6 +98,8 @@ enum Motion {
         speed: f32,
         /// Until this time, the pal runs in place.
         run_up_until: f64,
+        /// After the run in place, Link holds his sword forward.
+        sword: bool,
         /// The walk follows the mouse pointer and ends with a catch.
         chase: Option<Chase>,
     },
@@ -421,6 +429,7 @@ impl Pal {
                         target,
                         speed: CHASE_SPEED,
                         run_up_until: now,
+                        sword: false,
                         chase: Some(Chase {
                             until: now + CHASE_SECONDS,
                         }),
@@ -462,6 +471,7 @@ impl Pal {
                 speed,
                 run_up_until,
                 chase,
+                ..
             } => {
                 if let Some(c) = chase {
                     // Follow the pointer; give up when it leaves the range or
@@ -631,6 +641,7 @@ impl Pal {
                 target,
                 speed: gait.speed,
                 run_up_until: now + gait.run_up,
+                sword: gait.sword,
                 chase: None,
             }
         } else {
@@ -652,6 +663,19 @@ impl Pal {
             prop: None,
         };
         match (&self.motion, self.mood) {
+            (
+                Motion::Walk {
+                    sword: true,
+                    run_up_until,
+                    ..
+                },
+                _,
+            ) if now >= *run_up_until => {
+                // A dash with the Pegasus Shoes: the 6 frames of the run with
+                // the sword held forward.
+                let i = (self.walk_distance / (stride.max(0.1) * scale)) as usize % 6;
+                pose("walk_sword_charged", self.facing, i)
+            }
             (Motion::Walk { .. }, _) => {
                 // Frames 1 to 8 of the walk strip are the walk cycle; frame 0 is
                 // the standing frame.

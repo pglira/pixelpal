@@ -352,7 +352,7 @@ impl SettingsUi {
                 ui.add(DragValue::new(&mut cfg.walk_speed).range(5.0..=400.0).suffix(" px/s"));
                 ui.end_row();
                 ui.label("Vary the walk speed")
-                    .on_hover_text("Each walk is a stroll (½×), a walk (1×), a hurry (1.7×) or a Pegasus dash (3.5×).");
+                    .on_hover_text("Each walk is a stroll (½×), a walk (1×), a hurry (1.7×) or a dash with the Pegasus Shoes (3.5×).");
                 ui.checkbox(&mut cfg.vary_speed, "");
                 ui.end_row();
                 ui.label("Hop while walking")
