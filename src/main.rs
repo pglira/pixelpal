@@ -5,6 +5,7 @@ mod actions;
 mod app;
 mod chat;
 mod claude;
+mod enemy;
 mod files;
 mod history;
 mod link;

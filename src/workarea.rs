@@ -128,13 +128,13 @@ impl X11 {
 
     /// Sets the window states of the windows of the process `pid`.
     ///
-    /// The pal window (title `pal_title`) is above all other windows, on all
-    /// desktops, and has no taskbar or pager entry. The other windows keep their
+    /// The windows with a title in `titles` are above all other windows, on all
+    /// desktops, and have no taskbar or pager entry. The other windows keep their
     /// states: the window manager does not activate a window that skips the
     /// taskbar and the pager, and the chat panel needs the keyboard focus. The
     /// window manager can remove these states, so call this function
     /// periodically.
-    pub fn manage_windows(&self, pid: u32, pal_title: &str) {
+    pub fn manage_windows(&self, pid: u32, titles: &[&str]) {
         let atoms = [
             b"_NET_WM_STATE".as_slice(),
             b"_NET_WM_STATE_ABOVE",
@@ -154,7 +154,7 @@ impl X11 {
             return;
         };
         for (win, title) in self.windows_of(pid) {
-            if title != pal_title {
+            if !titles.contains(&title.as_str()) {
                 continue;
             }
             let wanted = [skip_taskbar, skip_pager, above, sticky];

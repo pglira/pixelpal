@@ -65,6 +65,10 @@ pub struct Config {
     pub night_end: u32,
     /// Link chases the mouse pointer when it comes near the ground beside him.
     pub chase: bool,
+    /// Enemies of the game appear now and then, and Link fights them.
+    pub enemies: bool,
+    /// Mean time between two enemies, in minutes.
+    pub enemy_minutes: f32,
     /// Link sleeps while the user is away.
     pub idle_sleep: bool,
     /// Time without input after which the user counts as away, in minutes.
@@ -111,6 +115,8 @@ impl Default for Config {
             night_start: 22,
             night_end: 7,
             chase: true,
+            enemies: true,
+            enemy_minutes: 5.0,
             idle_sleep: true,
             idle_minutes: 5.0,
             walk_speed: 40.0,
@@ -169,6 +175,7 @@ impl Config {
         self.bottom_margin = fix(self.bottom_margin, 0.0, 500.0, d.bottom_margin);
         self.action_chance = fix(self.action_chance, 0.0, 1.0, d.action_chance);
         self.idle_minutes = fix(self.idle_minutes, 0.5, 240.0, d.idle_minutes);
+        self.enemy_minutes = fix(self.enemy_minutes, 0.5, 240.0, d.enemy_minutes);
         self.night_start %= 24;
         self.night_end %= 24;
         self.panel_width = fix(self.panel_width, 280.0, 8000.0, d.panel_width);
@@ -366,6 +373,16 @@ impl SettingsUi {
                 ui.label("Chase the mouse pointer")
                     .on_hover_text("When the pointer comes near the ground beside Link, he runs to it and catches it with the bug net.");
                 ui.checkbox(&mut cfg.chase, "");
+                ui.end_row();
+                ui.label("Fight enemies")
+                    .on_hover_text("Octoroks, soldiers and Buzzblobs appear now and then, Keese at night. Link fights them with his sword. This value is the mean time between two enemies.");
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut cfg.enemies, "");
+                    ui.add_enabled(
+                        cfg.enemies,
+                        DragValue::new(&mut cfg.enemy_minutes).range(0.5..=240.0).speed(0.1).suffix(" min"),
+                    );
+                });
                 ui.end_row();
                 ui.label("Day and night")
                     .on_hover_text("At night, Link is darker, strolls, and only dozes, sleeps, reads or prays. Equal hours mean a night that lasts all day.");

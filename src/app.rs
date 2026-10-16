@@ -9,6 +9,7 @@ use egui::{
 use std::time::{Duration, Instant};
 
 use crate::chat::{Chat, TurnEnd};
+use crate::enemy::{ENEMY_TITLE, Fight};
 use crate::link::Sprites;
 use crate::pal::{Area, Pal, Senses};
 use crate::progress::Progress;
@@ -102,6 +103,10 @@ pub struct PalApp {
     senses_time: f64,
     /// The last input shape of the pal window.
     input_shape: Option<(u32, PxRect)>,
+    /// The enemies and Link's fights with them.
+    fight: Fight,
+    /// The last position sent to the enemy window.
+    enemy_pos: Option<Pos2>,
 }
 
 impl PalApp {
@@ -131,6 +136,8 @@ impl PalApp {
         };
         Self {
             sprites: Sprites::load(&cc.egui_ctx, tier),
+            fight: Fight::default(),
+            enemy_pos: None,
             progress,
             pal: Pal::new(start),
             x11,
@@ -526,6 +533,49 @@ impl PalApp {
         }
     }
 
+    /// Shows the enemy window while an enemy or a drop is on the screen. The
+    /// window lets all clicks through.
+    fn show_enemy(&mut self, ctx: &egui::Context, now: f64, night: bool) {
+        let Some(pos) = self.fight.window_pos(&self.cfg, self.area) else {
+            self.enemy_pos = None;
+            return;
+        };
+        let builder = ViewportBuilder::default()
+            .with_title(ENEMY_TITLE)
+            .with_position(pos)
+            .with_inner_size(crate::enemy::WINDOW * self.cfg.scale as f32)
+            .with_decorations(false)
+            .with_transparent(true)
+            .with_resizable(false)
+            .with_always_on_top()
+            .with_taskbar(false)
+            .with_mouse_passthrough(true);
+        let move_to = (self.enemy_pos != Some(pos)).then_some(pos);
+        self.enemy_pos = Some(pos);
+        ctx.show_viewport_immediate(
+            ViewportId::from_hash_of("pixelpal_enemy"),
+            builder,
+            |ui, _| {
+                if let Some(pos) = move_to {
+                    ui.ctx()
+                        .send_viewport_cmd(ViewportCommand::OuterPosition(pos));
+                }
+                let rect = ui.max_rect();
+                self.fight.paint(
+                    ui.painter(),
+                    rect,
+                    pos,
+                    &self.sprites,
+                    &self.cfg,
+                    self.area,
+                    night,
+                    now,
+                    false,
+                );
+            },
+        );
+    }
+
     fn show_menu(&mut self, ctx: &egui::Context, at: Pos2) {
         let builder = ViewportBuilder::default()
             .with_title(MENU_TITLE)
@@ -607,7 +657,7 @@ impl eframe::App for PalApp {
         if now - self.manage_time >= MANAGE_INTERVAL {
             self.manage_time = now;
             if let Some(x) = &self.x11 {
-                x.manage_windows(std::process::id(), PAL_TITLE);
+                x.manage_windows(std::process::id(), &[PAL_TITLE, ENEMY_TITLE]);
                 // Only Link's body takes clicks; the rest of the pal window
                 // lets them through to the windows below.
                 if let Some(win) = x.find_window(std::process::id(), PAL_TITLE) {
@@ -690,6 +740,17 @@ impl eframe::App for PalApp {
             may_move,
             &senses,
         );
+        let night = self.cfg.day_night && senses.night;
+        self.fight.update(
+            now,
+            dt,
+            &mut self.pal,
+            &self.sprites,
+            &self.cfg,
+            self.area,
+            may_move,
+            night,
+        );
 
         let pos = self.pal.pos.round();
         if self.sent_pos != Some(pos) {
@@ -699,6 +760,19 @@ impl eframe::App for PalApp {
 
         self.pal
             .paint(ui.painter(), rect, &self.sprites, &self.cfg, now);
+        // Stones that fly toward Link.
+        self.fight.paint(
+            ui.painter(),
+            rect,
+            self.pal.pos,
+            &self.sprites,
+            &self.cfg,
+            self.area,
+            night,
+            now,
+            true,
+        );
+        self.show_enemy(&ctx, now, night);
 
         // egui shows child windows only while the pal window is visible. After
         // the hidden pal window becomes visible again, this takes some time.
@@ -738,6 +812,9 @@ impl eframe::App for PalApp {
             .min(1.0);
         if !self.focus_pending.is_empty() {
             next = next.min(FOCUS_INTERVAL);
+        }
+        if self.fight.is_active() {
+            next = next.min(1.0 / 60.0);
         }
         ctx.request_repaint_after(Duration::from_secs_f64(next));
     }

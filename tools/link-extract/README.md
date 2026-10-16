@@ -89,6 +89,22 @@ The extras:
   when an object breaks (`Garnish16_ThrownItemDebris`).
 - `zzz`: the 3 sizes of the Zzz of a sleeping Link (`Ancilla21_Snore`).
 
+The enemies and drops are also extras, named `<enemy>_<animation>`. The sprite
+routines of the game draw them (`SpriteActive_Main`, `SpriteDeath_DrawPoof`),
+with the game paused, so that each routine draws and does not move. Their
+origin is the top-left corner of the 16x16 body box:
+
+- `octorok`: walk and shoot in 4 directions, hit; `octorok_stone`: idle,
+  crumble. Sprite graphics set 4, light world area 0x35.
+- `buzzblob`: walk, shock, hit. Same graphics as the Octorok.
+- `blue_soldier`, `green_soldier`: walk in 4 directions, hit. Sprite
+  graphics set 6, area 0x10.
+- `keese`: idle, fly, hit. Dungeon sprite graphics set 0x41.
+- `poof_poof`: the 8 frames of the death poof.
+- `heart`: idle, fall; `green_rupee`, `blue_rupee`: the 3 frames of the shine.
+
+The hit strips show the damage flash on the frame that faces down.
+
 The sequences come from the timer tables and state handlers in zelda3's
 `player.c` and `messaging.c`. The durations of the spiral stairs, the pull
 levers, the Quake jump and the first frame of the desert prayer are estimates.

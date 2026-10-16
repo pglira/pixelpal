@@ -102,6 +102,8 @@ enum Motion {
         sword: bool,
         /// The walk follows the mouse pointer and ends with a catch.
         chase: Option<Chase>,
+        /// The walk goes to an enemy or to a drop (see `crate::enemy`).
+        fight: bool,
     },
     /// Asleep while the user is away.
     Sleep,
@@ -138,6 +140,12 @@ pub struct Pal {
     night: bool,
     /// The earliest time of the next chase of the mouse pointer.
     next_chase: f64,
+    /// Until this time, Link flickers and enemies cannot hurt him.
+    hurt_until: f64,
+    /// Speed of the knockback after a hit, in points per second, and its end.
+    knock: (f32, f64),
+    /// True while an enemy is near: Link starts no random walk or action.
+    pub fighting: bool,
 }
 
 /// What the pal perceives in one frame.
@@ -172,7 +180,7 @@ const ZZZ_SLOWDOWN: f64 = 2.5;
 /// Animations whose poses lie on the ground.
 const LYING: &[&str] = &["sleep_in_bed"];
 /// Tint of the sprites during the night.
-const NIGHT_TINT: Color32 = Color32::from_rgb(160, 170, 235);
+pub const NIGHT_TINT: Color32 = Color32::from_rgb(160, 170, 235);
 
 /// A hop during a walk: Link leaves the ground, and his shadow stays on it.
 #[derive(Clone, Copy, Debug)]
@@ -191,6 +199,13 @@ impl Hop {
     }
 }
 
+/// Time in which enemies cannot hurt Link again after a hit, in seconds.
+const HURT_SECONDS: f64 = 1.2;
+/// Speed and duration of the knockback after a hit, in sprite pixels per
+/// second and in seconds.
+const KNOCK_SPEED: f32 = 90.0;
+const KNOCK_SECONDS: f64 = 0.2;
+
 /// Mean number of hops per second of walking.
 const HOP_RATE: f32 = 0.35;
 /// Range of the hop heights, in sprite pixels.
@@ -207,7 +222,85 @@ impl Pal {
             hop: None,
             night: false,
             next_chase: 0.0,
+            hurt_until: f64::NEG_INFINITY,
+            knock: (0.0, f64::NEG_INFINITY),
+            fighting: false,
         }
+    }
+
+    /// The screen x of the center of Link's body.
+    pub fn center_x(&self, scale: u32) -> f32 {
+        self.pos.x + Self::window_size(scale).x / 2.0
+    }
+
+    pub fn facing(&self) -> Dir {
+        self.facing
+    }
+
+    /// Lets Link stand and face `dir`.
+    #[cfg(test)]
+    pub fn stand_facing(&mut self, dir: Dir, until: f64) {
+        self.motion = Motion::Stand { until };
+        self.facing = dir;
+    }
+
+    /// True if Link can start a fight move: he stands, or he walks without a
+    /// chase of the pointer.
+    pub fn is_free(&self) -> bool {
+        matches!(
+            self.motion,
+            Motion::Stand { .. } | Motion::Walk { chase: None, .. }
+        )
+    }
+
+    /// True if Link holds his shield forward: he stands or walks.
+    pub fn is_shielding(&self) -> bool {
+        matches!(self.motion, Motion::Stand { .. } | Motion::Walk { .. })
+    }
+
+    /// True if an enemy can hurt Link now.
+    pub fn is_vulnerable(&self, now: f64) -> bool {
+        now >= self.hurt_until && self.can_react()
+    }
+
+    /// Lets Link walk until the center of his body is at the screen x `center`.
+    /// A walk to an earlier target changes its target.
+    pub fn approach(&mut self, center: f32, cfg: &Config, area: Area, now: f64) {
+        let size = Self::window_size(cfg.scale);
+        let max_x = (area.right - size.x).max(area.left);
+        let target = (center - size.x / 2.0).clamp(area.left, max_x);
+        match &mut self.motion {
+            Motion::Walk {
+                target: t,
+                fight: true,
+                ..
+            } => *t = target,
+            _ => {
+                self.motion = Motion::Walk {
+                    target,
+                    speed: CHASE_SPEED,
+                    run_up_until: now,
+                    sword: false,
+                    chase: None,
+                    fight: true,
+                };
+            }
+        }
+    }
+
+    /// Plays the fight action `name` toward `dir`.
+    pub fn fight_move(&mut self, name: &str, dir: Dir, now: f64, sprites: &Sprites) {
+        self.react(name, dir, now, sprites);
+    }
+
+    /// An enemy hits Link: he recoils, slides away from the enemy (`away` is
+    /// -1 or +1), and flickers for a while.
+    pub fn hurt(&mut self, away: f32, cfg: &Config, now: f64, sprites: &Sprites) {
+        let toward = if away > 0.0 { Dir::Left } else { Dir::Right };
+        self.react(actions::HURT, toward, now, sprites);
+        self.hop = None;
+        self.hurt_until = now + HURT_SECONDS;
+        self.knock = (away * KNOCK_SPEED * cfg.scale as f32, now + KNOCK_SECONDS);
     }
 
     /// True if the pal can start a reaction now: he is on the ground and awake.
@@ -306,6 +399,9 @@ impl Pal {
             Motion::Sleep if idle.is_some_and(|d| d.as_secs() >= 30 * 60) => 1.0,
             Motion::Sleep => 4.0 * FRAME * ZZZ_SLOWDOWN,
         };
+        if now < self.hurt_until {
+            t = FRAME;
+        }
         match self.mood {
             // The dots of the bubble change three times per second.
             Mood::Thinking => t = t.min(1.0 / 3.0 - now.rem_euclid(1.0 / 3.0)),
@@ -433,8 +529,9 @@ impl Pal {
                         chase: Some(Chase {
                             until: now + CHASE_SECONDS,
                         }),
+                        fight: false,
                     };
-                } else if may_move && now >= until {
+                } else if may_move && now >= until && !self.fighting {
                     let calm = self.mood == Mood::Calm;
                     if calm && cfg.actions && fastrand::f32() < cfg.action_chance {
                         self.start_action(now, sprites);
@@ -471,6 +568,7 @@ impl Pal {
                 speed,
                 run_up_until,
                 chase,
+                fight,
                 ..
             } => {
                 if let Some(c) = chase {
@@ -499,7 +597,7 @@ impl Pal {
                     }
                 }
                 let d = target - self.pos.x;
-                if !may_move || !(cfg.walk || chase.is_some()) {
+                if !may_move || !(cfg.walk || chase.is_some() || fight) {
                     self.motion = Motion::Stand {
                         until: now + pause(cfg),
                     };
@@ -531,6 +629,11 @@ impl Pal {
                     }
                 }
             }
+        }
+
+        // The knockback of a hit slides the pal on the ground.
+        if now < self.knock.1 {
+            self.pos.x += self.knock.0 * dt;
         }
 
         // A hop ends at the landing, and with any motion other than a walk or a
@@ -643,6 +746,7 @@ impl Pal {
                 run_up_until: now + gait.run_up,
                 sword: gait.sword,
                 chase: None,
+                fight: false,
             }
         } else {
             Motion::Stand {
@@ -765,9 +869,12 @@ impl Pal {
             let ground_origin = pos2(ground.left(), ground.bottom() - sprites.feet * scale);
             draw(shadow, 0, ground_origin);
         }
-        if let Some(clip) = sprites
-            .clip(shot.anim, shot.dir)
-            .or_else(|| sprites.clip("walk", Dir::Down))
+        // After a hit, Link flickers: he is hidden in every other frame.
+        let hidden = now < self.hurt_until && (now * 30.0) as i64 % 2 == 0;
+        if !hidden
+            && let Some(clip) = sprites
+                .clip(shot.anim, shot.dir)
+                .or_else(|| sprites.clip("walk", Dir::Down))
         {
             draw(clip, shot.frame, origin);
         }

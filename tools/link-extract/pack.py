@@ -26,6 +26,15 @@ DIRECTIONS = ["up", "down", "left", "right"]
 # Names of the extra strips, by the extra id of extract.c (enum kExtra...).
 EXTRAS = ["skull", "rock", "bush", "skull_debris", "rock_debris", "bush_debris", "zzz"]
 
+# Names of the enemies and drops, by the enemy id of extract.c (enum kEnemy...),
+# and of their animations, by the animation id (enum kAnim...). The enemy
+# records become extras named "<enemy>_<animation>".
+ENEMIES = ["octorok", "octorok_stone", "buzzblob", "keese", "blue_soldier",
+           "green_soldier", "poof", "heart", "green_rupee", "blue_rupee"]
+SPRITE_DIRS = ["right", "left", "down", "up"]
+ENEMY_ANIMS = ([f"walk_{d}" for d in SPRITE_DIRS] + [f"shoot_{d}" for d in SPRITE_DIRS]
+               + ["hit", "idle", "fly", "shock", "crumble", "poof", "fall"])
+
 HOLD = 0  # A duration of 0 means: the game holds this frame until an event.
 
 # The 4bpp graphics of Link: ROM offset and length.
@@ -287,6 +296,9 @@ class Packer:
                 shadows.append(p)
             elif p["yt"] == -2:
                 extras.setdefault(EXTRAS[p["dir"]], []).append(p)
+            elif p["yt"] == -3:
+                name = f"{ENEMIES[p['dir']]}_{ENEMY_ANIMS[p['pose']]}"
+                extras.setdefault(name, []).append(p)
             else:
                 groups.setdefault((p["yt"], p["dir"]), []).append(p)
 
@@ -428,7 +440,8 @@ def main():
             "tiers: the strips of each gear tier. Frame i of a strip is the rectangle",
             "  (crop, frame_width, frame_height) of pose poses[i]. origin: Link's coordinate",
             "  point in a frame; for a shadow, the same point with Link on the ground; for",
-            "  an extra, the top-left corner of the object (or of the Zzz tile).",
+            "  an extra, the top-left corner of the object (or of the Zzz tile); for an",
+            "  enemy or a drop, the top-left corner of its 16x16 body box.",
             "sequences: [frame index, duration in game frames at 60 fps]; duration 0 = hold",
             "  until an event. A sequence keyed by a direction applies to that direction only.",
             "check: FNV-1a 64 of the RGBA bytes of all strips of a tier, by strip name.",

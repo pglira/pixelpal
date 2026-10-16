@@ -367,9 +367,31 @@ pub fn dir_for(action: &Action, wanted: Dir) -> Dir {
     }
 }
 
+/// One sword swing at an enemy.
+pub const STRIKE: &str = "strike";
+/// One blow of the hammer at an enemy.
+pub const POUND: &str = "pound";
+/// The recoil of Link after an enemy hits him.
+pub const HURT: &str = "hurt";
+
+/// The moves of a fight with an enemy. Random actions never pick them.
+pub const FIGHT_ACTIONS: &[Action] = &[
+    action(
+        STRIKE,
+        SIDES,
+        &[Seq("sword_swing", "swing", Once), stand(0.15)],
+    ),
+    action(
+        POUND,
+        SIDES,
+        &[Seq("rod_or_hammer", "hammer", Once), stand(0.3)],
+    ),
+    action(HURT, SIDES, &[Pose("recoil", 0, 0.35), stand(0.2)]),
+];
+
 /// The action with the name `name`.
 pub fn find(name: &str) -> Option<&'static Action> {
-    ACTIONS.iter().find(|a| a.name == name)
+    ACTIONS.iter().chain(FIGHT_ACTIONS).find(|a| a.name == name)
 }
 
 /// The frames of `action` in direction `dir`. Returns `None` if the sprites
@@ -441,7 +463,7 @@ mod tests {
     fn every_action_has_its_sprites() {
         for tier in 0..crate::link::tier_count() {
             let sprites = Sprites::load(&egui::Context::default(), tier);
-            for action in ACTIONS {
+            for action in ACTIONS.iter().chain(FIGHT_ACTIONS) {
                 for &dir in action.dirs {
                     let shots = scene(action, dir, &sprites);
                     assert!(

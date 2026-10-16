@@ -5,6 +5,7 @@ A desktop pal for Linux. Link from *The Legend of Zelda: A Link to the Past* wal
 - Link walks, hops, dashes with the Pegasus Shoes, and plays actions from the game: sword swings, the spin attack, items, medallions, rocks, bushes, and more.
 - Each tool call of Claude gets an item of the game. A failed tool gives a shock.
 - Completed chats unlock better gear, up to the Golden Sword and the Red Mail.
+- Now and then an enemy appears: an Octorok, a soldier or a Buzzblob, and a Keese at night. Link fights it with his sword and picks up the heart or rupee that it drops.
 - At night, Link is calm. When you are away, he sleeps. He chases the mouse pointer.
 
 ## Requirements
@@ -40,6 +41,7 @@ The settings are in `~/.config/pixelpal/config.toml`. Because `claude -p` cannot
 
 - `PIXELPAL_ROM=<file> cargo test --release` runs the tests. Without `PIXELPAL_ROM`, the tests use the stored ROM.
 - `PIXELPAL_ACTION=<name> cargo run --release` plays one action again and again. The names are in `src/actions.rs`.
+- `PIXELPAL_ENEMY=<name> cargo run --release` sends one kind of enemy every few seconds: `octorok`, `green_soldier`, `blue_soldier`, `buzzblob` or `keese`.
 
 ## Known limits
 

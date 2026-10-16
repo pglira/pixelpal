@@ -8,7 +8,8 @@
 // Usage: extract <out.bin> [sword 0-4] [shield 0-3] [armor 0-2]
 //
 // Output: a header line, then one record per pose, one shadow record per
-// direction with yt = -1, and the extra records of WriteExtras() with yt = -2:
+// direction with yt = -1, the extra records of WriteExtras() with yt = -2, and
+// the enemy records of WriteEnemies() with yt = -3:
 //   int32 dir, yt, rt, r2; POSE_SIZE * POSE_SIZE RGBA pixels; int32 n; then
 //   n TileLog entries, one per drawn 8x8 tile, in drawing order.
 // Link's position (link_x_coord, link_y_coord) is at pixel (ORIGIN, ORIGIN).
@@ -19,6 +20,9 @@
 #include "src/config.h"
 #include "src/load_gfx.h"
 #include "src/nmi.h"
+#include "src/overworld.h"
+#include "src/sprite.h"
+#include "src/sprite_main.h"
 #include "snes/ppu.h"
 
 #include <stdio.h>
@@ -388,6 +392,218 @@ static void WriteExtras(FILE *f, uint32 *pixels) {
   }
 }
 
+// Enemy strips. Each record has the animation type -3, the enemy id as `dir`,
+// the frame as `rt`, and the animation id as `r2`. The sprite coordinate of
+// the enemy (the top-left corner of its 16x16 body box) is at pixel
+// (ORIGIN, ORIGIN). Every frame is drawn by the sprite routine of the game,
+// with the game paused so that the routine draws and does not move.
+enum { kEnemyOctorok, kEnemyOctorokStone, kEnemyBuzzblob, kEnemyKeese,
+       kEnemyBlueSoldier, kEnemyGreenSoldier, kEnemyPoof, kEnemyHeart,
+       kEnemyGreenRupee, kEnemyBlueRupee };
+
+// Animation ids. A walk or shoot animation adds the direction sprite_D
+// (0 = right, 1 = left, 2 = down, 3 = up) to its base id.
+enum { kAnimWalk = 0, kAnimShoot = 4, kAnimHit = 8, kAnimIdle = 9, kAnimFly = 10,
+       kAnimShock = 11, kAnimCrumble = 12, kAnimPoof = 13, kAnimFall = 14 };
+
+enum { kEnemySlot = 0 };
+
+// Sets up sprite slot kEnemySlot for `type` as SpritePrep_LoadProperties()
+// does, active, on the lower floor, at the screen point of Link.
+static void PrepEnemy(int type) {
+  int k = kEnemySlot;
+  sprite_type[k] = type;
+  SpritePrep_LoadProperties(k);
+  sprite_state[k] = 9;
+  sprite_floor[k] = 0;
+  sprite_x_lo[k] = SCREEN_POS, sprite_x_hi[k] = 0;
+  sprite_y_lo[k] = SCREEN_POS, sprite_y_hi[k] = 0;
+  sprite_obj_prio[k] = 0x20;
+}
+
+// Draws the sprite in slot kEnemySlot with `draw`, after the OAM allocation
+// of Sprite_TimersAndOam(), and writes the record.
+static void WriteEnemyFrame(FILE *f, uint32 *pixels, int id, int anim, int frame,
+                            void (*draw)(int k)) {
+  int k = kEnemySlot;
+  ClearOam();
+  Oam_ResetRegionBases();
+  Sprite_Get16BitCoords(k);
+  Oam_AllocateFromRegionA(((sprite_flags2[k] & 0x1f) + 1) * 4);
+  draw(k);
+  RenderOam(pixels);
+  int32_t hdr[4] = { id, -3, frame, anim };
+  WritePose(f, hdr, pixels);
+}
+
+// The damage flash of Sprite_TimersAndOam(): while sprite_hit_timer counts
+// down, its low 3 bits select the palette (XOR) of the sprite, one per frame.
+static void WriteEnemyHit(FILE *f, uint32 *pixels, int id) {
+  uint8 prio = sprite_obj_prio[kEnemySlot];
+  for (int i = 0; i < 8; i++) {
+    sprite_obj_prio[kEnemySlot] = prio & ~0xe | (7 - i) * 2;
+    WriteEnemyFrame(f, pixels, id, kAnimHit, i, SpriteActive_Main);
+  }
+  sprite_obj_prio[kEnemySlot] = prio;
+}
+
+// Loads the sprite graphics set `gfx` into VRAM 0x5000..0x5fff, the common
+// sprite pack `misc`, and the sprite palettes of a light world area with the
+// sprite palette set `spr_pal`.
+static void LoadEnemyGraphics(int gfx, int misc, int area, int spr_pal) {
+  sprite_graphics_index = gfx;
+  misc_sprites_graphics_index = misc;
+  InitializeTilesets();
+  overworld_screen_index = area;
+  palette_sp0l = 1;
+  Palette_Load_SpriteMain();
+  Palette_Load_Sp0L();
+  Palette_MiscSprite_Outdoors();
+  Overworld_LoadPalettes(GetOverworldBgPalette(area), spr_pal);
+  // Sprite palettes 0..6; palette 7 holds Link.
+  memcpy(&main_palette_buffer[128], &aux_palette_buffer[128], 112 * sizeof(uint16));
+}
+
+static void DrawPoof(int k) {
+  SpriteDeath_DrawPoof(k);
+}
+
+static void WriteEnemies(FILE *f, uint32 *pixels) {
+  int k = kEnemySlot;
+  uint8 sub_bak = submodule_index;
+  submodule_index = 1;
+
+  // Octorok, its stone and the Buzzblob: Lake Hylia NW (area 0x35), sprite
+  // graphics set 4, sprite palette set 3.
+  LoadEnemyGraphics(4, 1, 0x35, 3);
+
+  // Octorok walk: sprite_graphics = subtype2 >> 3 & 3 | (D & 2) << 1.
+  for (int d = 0; d < 4; d++) {
+    for (int i = 0; i < 4; i++) {
+      PrepEnemy(0x08);
+      sprite_D[k] = d;
+      sprite_graphics[k] = i | (d & 2) << 1;
+      WriteEnemyFrame(f, pixels, kEnemyOctorok, kAnimWalk + d, i, SpriteActive_Main);
+    }
+  }
+  // Octorok shoot: sprite_C (the snout) is 0, 1, 2 and back to 0.
+  for (int d = 0; d < 4; d++) {
+    for (int i = 0; i < 3; i++) {
+      PrepEnemy(0x08);
+      sprite_D[k] = d;
+      sprite_graphics[k] = (d & 2) << 1;
+      sprite_C[k] = i;
+      WriteEnemyFrame(f, pixels, kEnemyOctorok, kAnimShoot + d, i, SpriteActive_Main);
+    }
+  }
+  PrepEnemy(0x08);
+  sprite_D[k] = 2;
+  sprite_graphics[k] = 4;
+  WriteEnemyHit(f, pixels, kEnemyOctorok);
+
+  // Octorok stone: in flight, and crumbling with sprite_delay_main from 31 down.
+  PrepEnemy(0x0c);
+  WriteEnemyFrame(f, pixels, kEnemyOctorokStone, kAnimIdle, 0, SpriteActive_Main);
+  for (int i = 0; i < 4; i++) {
+    PrepEnemy(0x0c);
+    sprite_state[k] = 6;
+    sprite_delay_main[k] = 31 - i * 8;
+    WriteEnemyFrame(f, pixels, kEnemyOctorokStone, kAnimCrumble, i, SpriteActive_Main);
+  }
+
+  // Buzzblob: sprite_graphics = {0, 1, 0, 2}[subtype2 >> 3 & 3], plus 3 while
+  // sprite_delay_aux1 (the shock, from 64 down) flashes the palette.
+  static const uint8 kBuzzblobGfx[4] = { 0, 1, 0, 2 };
+  for (int i = 0; i < 4; i++) {
+    PrepEnemy(0x0d);
+    sprite_graphics[k] = kBuzzblobGfx[i];
+    WriteEnemyFrame(f, pixels, kEnemyBuzzblob, kAnimWalk + 2, i, SpriteActive_Main);
+  }
+  for (int i = 0; i < 16; i++) {
+    PrepEnemy(0x0d);
+    sprite_delay_aux1[k] = 64 - i * 2;
+    sprite_graphics[k] = kBuzzblobGfx[i >> 2 & 3] + 3;
+    WriteEnemyFrame(f, pixels, kEnemyBuzzblob, kAnimShock, i, SpriteActive_Main);
+  }
+  PrepEnemy(0x0d);
+  WriteEnemyHit(f, pixels, kEnemyBuzzblob);
+
+  // Soldiers: Lost Woods Outskirts (area 0x10), sprite graphics set 6,
+  // sprite palette set 1. The body frame is kSoldier_Gfx2[D * 4 + (subtype2
+  // >> 3 & 3)] of Guard_TickAndUpdateBody(), and the head looks along D.
+  LoadEnemyGraphics(6, 1, 0x10, 1);
+  static const uint8 kSoldierGfx2[16] = { 11, 12, 13, 12, 4, 5, 6, 5, 0, 1, 2, 3, 7, 8, 9, 10 };
+  for (int s = 0; s < 2; s++) {
+    int id = s ? kEnemyGreenSoldier : kEnemyBlueSoldier;
+    int type = s ? 0x42 : 0x41;
+    for (int d = 0; d < 4; d++) {
+      for (int i = 0; i < 4; i++) {
+        PrepEnemy(type);
+        sprite_D[k] = sprite_head_dir[k] = d;
+        sprite_graphics[k] = kSoldierGfx2[d * 4 + i];
+        WriteEnemyFrame(f, pixels, id, kAnimWalk + d, i, SpriteActive_Main);
+      }
+    }
+    PrepEnemy(type);
+    sprite_D[k] = sprite_head_dir[k] = 2;
+    sprite_graphics[k] = kSoldierGfx2[8];
+    WriteEnemyHit(f, pixels, id);
+  }
+
+  // Keese: a dungeon enemy, in sprite graphics set 0x41 (the set of the
+  // enemy block 1). It rests with sprite_graphics 0 and flies with
+  // sprite_graphics = (frame_counter >> 2 & 1) + 1.
+  LoadEnemyGraphics(0x41, 10, 0x10, 1);
+  PrepEnemy(0x6f);
+  WriteEnemyFrame(f, pixels, kEnemyKeese, kAnimIdle, 0, SpriteActive_Main);
+  for (int i = 0; i < 2; i++) {
+    PrepEnemy(0x6f);
+    sprite_graphics[k] = i + 1;
+    WriteEnemyFrame(f, pixels, kEnemyKeese, kAnimFly, i, SpriteActive_Main);
+  }
+  PrepEnemy(0x6f);
+  sprite_graphics[k] = 1;
+  WriteEnemyHit(f, pixels, kEnemyKeese);
+
+  // The death poof of SpriteDeath_DrawPoof(), light world, with
+  // sprite_delay_main from 31 down: one frame per 4 counts.
+  LoadEnemyGraphics(4, 1, 0x35, 3);
+  LoadDefaultGraphics();
+  for (int i = 0; i < 8; i++) {
+    PrepEnemy(0x08);
+    sprite_state[k] = 6;
+    sprite_delay_main[k] = 31 - i * 4;
+    WriteEnemyFrame(f, pixels, kEnemyPoof, kAnimPoof, i, DrawPoof);
+  }
+
+  // Drops: the heart on the ground (sprite_graphics 0) and in its fall
+  // (sprite_graphics 1, mirrored while it glides to the right), and the rupees.
+  PrepEnemy(0xd8);
+  WriteEnemyFrame(f, pixels, kEnemyHeart, kAnimIdle, 0, SpriteActive_Main);
+  for (int i = 0; i < 2; i++) {
+    PrepEnemy(0xd8);
+    sprite_graphics[k] = 1;
+    sprite_oam_flags[k] = sprite_oam_flags[k] & ~0x40 | (i ? 0x40 : 0);
+    WriteEnemyFrame(f, pixels, kEnemyHeart, kAnimFall, i, SpriteActive_Main);
+  }
+  // The rupees use tiles 0x0b and 0x1b, which NMI_DoUpdates() uploads from
+  // the item graphics at 0xb280 + {0, 0x20, 0x40}: the shine of the rupee.
+  for (int i = 0; i < 3; i++) {
+    NMI_PrepareSprites();
+    dma_source_addr_9 = 0xb280 + i * 0x20;
+    dma_source_addr_14 = dma_source_addr_9 + 0x60;
+    nmi_disable_core_updates = 0;
+    NMI_DoUpdates();
+    PrepEnemy(0xd9);
+    WriteEnemyFrame(f, pixels, kEnemyGreenRupee, kAnimIdle, i, SpriteActive_Main);
+    PrepEnemy(0xda);
+    WriteEnemyFrame(f, pixels, kEnemyBlueRupee, kAnimIdle, i, SpriteActive_Main);
+  }
+
+  sprite_state[k] = 0;
+  submodule_index = sub_bak;
+}
+
 int main(int argc, char **argv) {
   if (argc < 2) {
     fprintf(stderr, "usage: %s <out.bin> [sword 0-4] [shield 0-3] [armor 0-2]\n", argv[0]);
@@ -473,6 +689,7 @@ int main(int argc, char **argv) {
   }
 
   WriteExtras(f, pixels);
+  WriteEnemies(f, pixels);
   fclose(f);
   return 0;
 }
