@@ -231,7 +231,11 @@ impl Chat {
             ui.add_space(6.0);
             let id = Id::new(INPUT_ID);
             let enter = ui.memory(|m| m.has_focus(id))
-                && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
+                && ui.input_mut(|i| {
+                    // `consume_key` ignores extra Shift, so check it explicitly to
+                    // leave Shift+Enter to the TextEdit as a newline.
+                    !i.modifiers.shift && i.consume_key(Modifiers::NONE, Key::Enter)
+                });
             let edit = ui.add(
                 egui::TextEdit::multiline(&mut self.input)
                     .id(id)
