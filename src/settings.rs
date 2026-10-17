@@ -53,6 +53,11 @@ pub struct Config {
     pub vary_speed: bool,
     /// Lets the pal hop at random moments of a walk.
     pub hops: bool,
+    /// Link dashes with the Pegasus Shoes to the edge of the screen now and
+    /// then, and bounces back from it.
+    pub edge_dash: bool,
+    /// Probability that a walk is a dash to the edge, 0 to 1.
+    pub edge_dash_chance: f32,
     /// Link's gear grows with the number of completed chats.
     pub gear_progress: bool,
     /// Link uses an item of the game for each tool call of Claude.
@@ -112,6 +117,8 @@ impl Default for Config {
             action_chance: 0.5,
             vary_speed: true,
             hops: true,
+            edge_dash: true,
+            edge_dash_chance: 0.05,
             gear_progress: true,
             tool_reactions: true,
             day_night: true,
@@ -178,6 +185,7 @@ impl Config {
         self.gravity = fix(self.gravity, 0.5, 100.0, d.gravity);
         self.bottom_margin = fix(self.bottom_margin, 0.0, 500.0, d.bottom_margin);
         self.action_chance = fix(self.action_chance, 0.0, 1.0, d.action_chance);
+        self.edge_dash_chance = fix(self.edge_dash_chance, 0.0, 1.0, d.edge_dash_chance);
         self.idle_minutes = fix(self.idle_minutes, 0.5, 240.0, d.idle_minutes);
         self.enemy_minutes = fix(self.enemy_minutes, 0.5, 240.0, d.enemy_minutes);
         self.night_start %= 24;
@@ -371,6 +379,17 @@ impl SettingsUi {
                 ui.label("Hop while walking")
                     .on_hover_text("Link hops at random moments of a walk. His shadow stays on the ground.");
                 ui.checkbox(&mut cfg.hops, "");
+                ui.end_row();
+                ui.label("Dash to the screen edge")
+                    .on_hover_text("Now and then, Link dashes with the Pegasus Shoes to the edge of the screen and bounces back from it, as from a wall in the game. This value is the probability that a walk is such a dash.");
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut cfg.edge_dash, "");
+                    ui.add_enabled(
+                        cfg.edge_dash,
+                        egui::Slider::new(&mut cfg.edge_dash_chance, 0.0..=1.0)
+                            .custom_formatter(|v, _| format!("{:.0} %", v * 100.0)),
+                    );
+                });
                 ui.end_row();
                 ui.label("React to Claude's tools")
                     .on_hover_text("Link reads for Read, digs for Edit, hammers for Bash, catches for WebSearch, and gets a shock when a tool fails.");

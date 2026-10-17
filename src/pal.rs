@@ -104,6 +104,14 @@ enum Motion {
         chase: Option<Chase>,
         /// The walk goes to an enemy or to a drop (see `crate::enemy`).
         fight: bool,
+        /// The walk is a dash to the edge of the area and ends with a bonk.
+        bonk: bool,
+    },
+    /// Link bounces back from the edge of the area after a dash, as from a
+    /// wall in the game. `away` is -1 or +1.
+    Bonk {
+        start: f64,
+        away: f32,
     },
     /// Asleep while the user is away.
     Sleep,
@@ -211,6 +219,37 @@ const HOP_RATE: f32 = 0.35;
 /// Range of the hop heights, in sprite pixels.
 const HOP_HEIGHT: (f32, f32) = (5.0, 11.0);
 
+/// The bonk after a dash into a wall, as `LinkApplyTileRebound` of the game
+/// sets it: the speed away from the wall and the upward start speed, in
+/// sprite pixels per second, and the gravity, in sprite pixels per second².
+const BONK_SPEED: f32 = 90.0;
+const BONK_RISE: f32 = 135.0;
+const BONK_GRAVITY: f32 = 450.0;
+/// Number of arcs of a bonk. Each bounce has half the start speed of the arc
+/// before it.
+const BONK_ARCS: u32 = 3;
+
+/// Duration of the first arc of a bonk, in seconds. Link moves away from the
+/// wall only during this arc.
+fn bonk_first_arc() -> f32 {
+    2.0 * BONK_RISE / BONK_GRAVITY
+}
+
+/// Height of Link above the ground `t` seconds after the start of a bonk, in
+/// sprite pixels. `None` after the last landing.
+fn bonk_height(t: f32) -> Option<f32> {
+    let (mut t, mut v) = (t, BONK_RISE);
+    for _ in 0..BONK_ARCS {
+        let d = 2.0 * v / BONK_GRAVITY;
+        if t < d {
+            return Some(v * t - BONK_GRAVITY * t * t / 2.0);
+        }
+        t -= d;
+        v /= 2.0;
+    }
+    None
+}
+
 impl Pal {
     pub fn new(pos: Pos2) -> Self {
         Self {
@@ -283,6 +322,7 @@ impl Pal {
                     sword: false,
                     chase: None,
                     fight: true,
+                    bonk: false,
                 };
             }
         }
@@ -307,7 +347,7 @@ impl Pal {
     fn can_react(&self) -> bool {
         !matches!(
             self.motion,
-            Motion::Held | Motion::Fall { .. } | Motion::Sleep
+            Motion::Held | Motion::Fall { .. } | Motion::Sleep | Motion::Bonk { .. }
         )
     }
 
@@ -373,7 +413,7 @@ impl Pal {
     ) -> f64 {
         const FRAME: f64 = 1.0 / 60.0;
         let mut t = match &self.motion {
-            Motion::Fall { .. } | Motion::Held => FRAME,
+            Motion::Fall { .. } | Motion::Held | Motion::Bonk { .. } => FRAME,
             Motion::Walk { .. } if self.hop.is_some() => FRAME,
             Motion::Walk { speed, .. } => {
                 // The window moves by one physical pixel.
@@ -474,6 +514,10 @@ impl Pal {
         let ground = area.bottom - size.y - cfg.bottom_margin;
         let min_x = area.left;
         let max_x = (area.right - size.x).max(min_x);
+        // The window x at which Link's body touches the left or the right
+        // edge of the area.
+        let margin = (size.x - BODY_WIDTH * cfg.scale as f32) / 2.0;
+        let edges = (min_x - margin, max_x + margin);
         self.night = cfg.day_night && senses.night;
 
         if let Mood::Happy { until } = self.mood
@@ -502,6 +546,17 @@ impl Pal {
 
         match self.motion {
             Motion::Held | Motion::Sleep => return,
+            Motion::Bonk { start, away } => {
+                let t = (now - start) as f32;
+                if t < bonk_first_arc() {
+                    self.pos.x += away * BONK_SPEED * cfg.scale as f32 * dt;
+                }
+                if bonk_height(t).is_none() {
+                    self.motion = Motion::Stand {
+                        until: now + pause(cfg),
+                    };
+                }
+            }
             Motion::Fall { vy } => {
                 let gravity = cfg.gravity * PIXELS_PER_METER * cfg.scale as f32;
                 let vy = vy + gravity * dt;
@@ -530,13 +585,14 @@ impl Pal {
                             until: now + CHASE_SECONDS,
                         }),
                         fight: false,
+                        bonk: false,
                     };
                 } else if may_move && now >= until && !self.fighting {
                     let calm = self.mood == Mood::Calm;
                     if calm && cfg.actions && fastrand::f32() < cfg.action_chance {
                         self.start_action(now, sprites);
                     } else if cfg.walk {
-                        self.start_walk(now, cfg, min_x, max_x, size.x);
+                        self.start_walk(now, cfg, (min_x, max_x), edges, size.x);
                     } else {
                         self.motion = Motion::Stand {
                             until: now + pause(cfg),
@@ -569,6 +625,7 @@ impl Pal {
                 run_up_until,
                 chase,
                 fight,
+                bonk,
                 ..
             } => {
                 if let Some(c) = chase {
@@ -609,7 +666,14 @@ impl Pal {
                     let step = cfg.walk_speed * speed * dt;
                     self.facing = if d > 0.0 { Dir::Right } else { Dir::Left };
                     self.walk_distance += step.min(d.abs());
-                    if d.abs() <= step {
+                    if d.abs() <= step && bonk {
+                        self.pos.x = target;
+                        self.hop = None;
+                        self.motion = Motion::Bonk {
+                            start: now,
+                            away: -d.signum(),
+                        };
+                    } else if d.abs() <= step {
                         self.pos.x = target;
                         if fastrand::bool() {
                             self.facing = Dir::Down;
@@ -646,8 +710,14 @@ impl Pal {
         }
 
         // Keep the pal inside the area and on the ground. A drop from above
-        // starts above the area and falls down to the ground.
-        self.pos.x = self.pos.x.clamp(min_x, max_x);
+        // starts above the area and falls down to the ground. A dash to the
+        // edge and its bonk may move the empty sides of the window out of
+        // the area.
+        let (lo, hi) = match self.motion {
+            Motion::Walk { bonk: true, .. } | Motion::Bonk { .. } => edges,
+            _ => (min_x, max_x),
+        };
+        self.pos.x = self.pos.x.clamp(lo, hi);
         if !matches!(self.motion, Motion::Fall { .. }) {
             if self.pos.y < ground - 0.5 {
                 self.motion = Motion::Fall { vy: 0.0 };
@@ -727,9 +797,39 @@ impl Pal {
             .then(|| (p.x - size.x / 2.0 - dx.signum() * 6.0 * scale).clamp(area.left, max_x))
     }
 
-    fn start_walk(&mut self, now: f64, cfg: &Config, min_x: f32, max_x: f32, width: f32) {
-        let lo = min_x + width;
-        let hi = (max_x - width).max(lo);
+    /// Starts a walk to a random place between `limits`, the window x range of
+    /// the area. Now and then, the walk is a dash with the Pegasus Shoes to the
+    /// farther of the `edges` instead, which ends with a bonk.
+    fn start_walk(
+        &mut self,
+        now: f64,
+        cfg: &Config,
+        limits: (f32, f32),
+        edges: (f32, f32),
+        width: f32,
+    ) {
+        if cfg.edge_dash && !self.night && fastrand::f32() < cfg.edge_dash_chance {
+            let target = if self.pos.x - edges.0 > edges.1 - self.pos.x {
+                edges.0
+            } else {
+                edges.1
+            };
+            if (target - self.pos.x).abs() >= MIN_WALK {
+                let gait = &GAITS[3];
+                self.motion = Motion::Walk {
+                    target,
+                    speed: gait.speed,
+                    run_up_until: now + gait.run_up,
+                    sword: gait.sword,
+                    chase: None,
+                    fight: false,
+                    bonk: true,
+                };
+                return;
+            }
+        }
+        let lo = limits.0 + width;
+        let hi = (limits.1 - width).max(lo);
         let target = lo + fastrand::f32() * (hi - lo);
         self.motion = if (target - self.pos.x).abs() >= MIN_WALK {
             // At night, Link only strolls.
@@ -747,6 +847,7 @@ impl Pal {
                 sword: gait.sword,
                 chase: None,
                 fight: false,
+                bonk: false,
             }
         } else {
             Motion::Stand {
@@ -787,6 +888,7 @@ impl Pal {
                 pose("walk", self.facing, 1 + i)
             }
             (Motion::Held | Motion::Fall { .. }, _) => pose("recoil", Dir::Down, 0),
+            (Motion::Bonk { .. }, _) => pose("recoil", self.facing, 0),
             (Motion::Sleep, _) => pose("sleep_in_bed", Dir::Down, 0),
             (_, Mood::Happy { .. }) => pose("item_get_two_hands", Dir::Down, 0),
             (Motion::Act { shots, start, .. }, _) => {
@@ -825,6 +927,9 @@ impl Pal {
     pub fn paint(&self, painter: &Painter, rect: Rect, sprites: &Sprites, cfg: &Config, now: f64) {
         let scale = cfg.scale as f32;
         let mut hop = self.hop_height(now, cfg) * scale;
+        if let Motion::Bonk { start, .. } = self.motion {
+            hop += bonk_height((now - start) as f32).unwrap_or(0.0) * scale;
+        }
         if let Mood::Happy { until } = self.mood {
             let t = (HAPPY_SECONDS - (until - now)) as f32;
             if t < 1.0 {
@@ -1010,6 +1115,62 @@ mod tests {
         let top = (hop.v0 / g) as f64;
         assert!((hop.height(top, g) - h).abs() < 1e-3);
         assert!(hop.height(2.0 * top + 0.01, g) < 0.0);
+    }
+
+    #[test]
+    fn bonk_bounces_and_lands() {
+        assert_eq!(bonk_height(0.0), Some(0.0));
+        let top = BONK_RISE / BONK_GRAVITY;
+        assert!(bonk_height(top).unwrap() > 15.0);
+        // The second arc is lower than the first.
+        let second = bonk_height(2.0 * top + top / 2.0).unwrap();
+        assert!(second > 0.0 && second < bonk_height(top).unwrap() / 2.0);
+        assert_eq!(bonk_height(4.0 * top), None);
+    }
+
+    #[test]
+    fn edge_dash_ends_with_a_bonk_inside_the_area() {
+        let sprites = Sprites::load(&egui::Context::default(), 0);
+        let cfg = Config {
+            edge_dash: true,
+            edge_dash_chance: 1.0,
+            actions: false,
+            day_night: false,
+            ..Config::default()
+        };
+        let area = Area {
+            left: 0.0,
+            top: 0.0,
+            right: 1000.0,
+            bottom: 600.0,
+        };
+        let size = Pal::window_size(cfg.scale);
+        let mut pal = Pal::new(pos2(300.0, area.bottom - size.y));
+        pal.motion = Motion::Stand { until: 0.0 };
+        let senses = Senses::default();
+        let (mut now, dt) = (0.0, 1.0 / 60.0);
+        let mut bonked = false;
+        let mut edge_x = f32::NAN;
+        while now < 20.0 {
+            pal.update(now, dt as f32, area, &cfg, &sprites, true, &senses);
+            now += dt;
+            if !bonked && matches!(pal.motion, Motion::Bonk { .. }) {
+                bonked = true;
+                edge_x = pal.pos.x;
+            }
+            if bonked && matches!(pal.motion, Motion::Stand { .. }) {
+                break;
+            }
+        }
+        assert!(bonked, "no bonk");
+        // Link's body touches the right edge, the farther one.
+        let body_right = edge_x + size.x / 2.0 + BODY_WIDTH * cfg.scale as f32 / 2.0;
+        assert!(
+            (body_right - area.right).abs() < 1.0,
+            "body ends at {body_right}"
+        );
+        assert!(matches!(pal.motion, Motion::Stand { .. }));
+        assert!(pal.pos.x + size.x <= area.right && pal.pos.x < edge_x);
     }
 
     #[test]
