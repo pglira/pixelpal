@@ -51,6 +51,9 @@ pub struct X11 {
     /// For each client window: the process id and the title, so that each
     /// window is queried only once.
     owners: RefCell<HashMap<Window, (Option<u32>, String)>>,
+    /// The last found top-level window that the window manager does not
+    /// manage, with its title.
+    unmanaged: RefCell<Option<(Window, String)>>,
 }
 
 impl X11 {
@@ -62,6 +65,7 @@ impl X11 {
             root,
             atoms: RefCell::default(),
             owners: RefCell::default(),
+            unmanaged: RefCell::default(),
         })
     }
 
@@ -185,6 +189,66 @@ impl X11 {
             .into_iter()
             .find(|(_, t)| t == title)
             .map(|(w, _)| w)
+    }
+
+    /// The top-level window of the process `pid` with the title `title`,
+    /// also if the window manager does not manage it. The requests for all
+    /// top-level windows go out together, so the search takes one round trip.
+    fn find_toplevel(&self, pid: u32, title: &str) -> Option<Window> {
+        let (wm_pid, wm_name, utf8) = (
+            self.atom(b"_NET_WM_PID")?,
+            self.atom(b"_NET_WM_NAME")?,
+            self.atom(b"UTF8_STRING")?,
+        );
+        let tree = self.conn.query_tree(self.root).ok()?.reply().ok()?;
+        let cookies: Vec<_> = tree
+            .children
+            .iter()
+            .map(|&w| {
+                let pid_cookie = self
+                    .conn
+                    .get_property(false, w, wm_pid, AtomEnum::CARDINAL, 0, 1);
+                let name_cookie = self.conn.get_property(false, w, wm_name, utf8, 0, 256);
+                (w, pid_cookie, name_cookie)
+            })
+            .collect();
+        let mut found = None;
+        for (w, pid_cookie, name_cookie) in cookies {
+            let owner = pid_cookie
+                .ok()
+                .and_then(|c| c.reply().ok())
+                .and_then(|r| r.value32().and_then(|mut v| v.next()));
+            let name = name_cookie.ok().and_then(|c| c.reply().ok());
+            if found.is_none()
+                && owner == Some(pid)
+                && name.is_some_and(|r| r.value == title.as_bytes())
+            {
+                found = Some(w);
+            }
+        }
+        found
+    }
+
+    /// Raises the top-level window of the process `pid` with the title
+    /// `title` above all other windows. The window manager does not stack
+    /// windows that it does not manage, so their owner must raise them.
+    pub fn raise_toplevel(&self, pid: u32, title: &str) {
+        use x11rb::protocol::xproto::{ConfigureWindowAux, StackMode};
+        let cached = self
+            .unmanaged
+            .borrow()
+            .as_ref()
+            .filter(|(w, t)| {
+                t == title && self.conn.get_geometry(*w).is_ok_and(|c| c.reply().is_ok())
+            })
+            .map(|(w, _)| *w);
+        let Some(win) = cached.or_else(|| self.find_toplevel(pid, title)) else {
+            return;
+        };
+        *self.unmanaged.borrow_mut() = Some((win, title.to_owned()));
+        let aux = ConfigureWindowAux::new().stack_mode(StackMode::ABOVE);
+        let _ = self.conn.configure_window(win, &aux);
+        let _ = self.conn.flush();
     }
 
     /// The active window (`_NET_ACTIVE_WINDOW`).

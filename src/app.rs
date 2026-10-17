@@ -265,8 +265,8 @@ impl PalApp {
                 if self.pal.is_held() {
                     self.pal.pos = pos;
                 } else {
-                    let max_x = (self.area.right - Pal::window_size(self.cfg.scale).x)
-                        .max(self.area.left);
+                    let max_x =
+                        (self.area.right - Pal::window_size(self.cfg.scale).x).max(self.area.left);
                     self.pal.pos.x = pos.x.clamp(self.area.left, max_x);
                 }
             }
@@ -606,6 +606,10 @@ impl PalApp {
 
     /// Shows the enemy window while an enemy or a drop is on the screen. The
     /// window lets all clicks through.
+    ///
+    /// The window manager does not manage the enemy window (override
+    /// redirect), so a new enemy never takes the keyboard focus from the
+    /// active window.
     fn show_enemy(&mut self, ctx: &egui::Context, now: f64, night: bool) {
         let Some(pos) = self.fight.window_pos(&self.cfg, self.area) else {
             self.enemy_pos = None;
@@ -620,7 +624,9 @@ impl PalApp {
             .with_resizable(false)
             .with_always_on_top()
             .with_taskbar(false)
-            .with_mouse_passthrough(true);
+            .with_mouse_passthrough(true)
+            .with_override_redirect(true)
+            .with_window_type(egui::X11WindowType::Notification);
         let move_to = (self.enemy_pos != Some(pos)).then_some(pos);
         self.enemy_pos = Some(pos);
         ctx.show_viewport_immediate(
@@ -729,7 +735,10 @@ impl eframe::App for PalApp {
         if now - self.manage_time >= MANAGE_INTERVAL {
             self.manage_time = now;
             if let Some(x) = &self.x11 {
-                x.manage_windows(std::process::id(), &[PAL_TITLE, ENEMY_TITLE]);
+                x.manage_windows(std::process::id(), &[PAL_TITLE]);
+                if self.enemy_pos.is_some() {
+                    x.raise_toplevel(std::process::id(), ENEMY_TITLE);
+                }
                 // Only Link's body takes clicks; the rest of the pal window
                 // lets them through to the windows below.
                 if let Some(win) = x.find_window(std::process::id(), PAL_TITLE) {
