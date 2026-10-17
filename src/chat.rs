@@ -6,7 +6,7 @@ use egui::{Align, Color32, ComboBox, Frame, Id, Key, Layout, Margin, Modifiers, 
 use egui_commonmark::CommonMarkCache;
 
 use crate::claude::{Event, Request, Run};
-use crate::history::{LastChat, Message, Role};
+use crate::history::{Message, Role, SavedChat};
 use crate::settings::Config;
 
 const INPUT_ID: &str = "prompt_input";
@@ -31,9 +31,17 @@ pub enum ToolActivity {
     Error,
 }
 
+/// The open history list of the chat panel.
+struct History {
+    chats: Vec<SavedChat>,
+    query: String,
+}
+
 pub struct Chat {
     messages: Vec<Message>,
     input: String,
+    /// The id of the stored chat, from the first prompt of the chat on.
+    chat_id: Option<String>,
     session_id: Option<String>,
     /// Working directory of the session. `--resume` only finds the session there.
     session_dir: Option<PathBuf>,
@@ -41,25 +49,28 @@ pub struct Chat {
     /// Tool events since the last `take_tool_activity`.
     tool_activity: Vec<ToolActivity>,
     cache: CommonMarkCache,
-    /// The stored last chat, while the start question is open.
-    question: Option<LastChat>,
+    /// The last chat of the working directory, while the start question is open.
+    question: Option<SavedChat>,
+    history: Option<History>,
     focus_input: bool,
 }
 
 impl Chat {
-    /// Creates the chat. If a last chat for the current working directory exists,
-    /// the chat asks whether to continue it.
+    /// Creates the chat. If a stored chat for the current working directory
+    /// exists, the chat asks whether to continue the most recent one.
     pub fn new(cfg: &Config) -> Self {
-        let question = LastChat::load().filter(|lc| lc.working_dir == cfg.working_dir());
+        let question = SavedChat::latest_in(&cfg.working_dir());
         Self {
             messages: Vec::new(),
             input: String::new(),
+            chat_id: None,
             session_id: None,
             session_dir: None,
             run: None,
             tool_activity: Vec::new(),
             cache: CommonMarkCache::default(),
             question,
+            history: None,
             focus_input: true,
         }
     }
@@ -123,9 +134,12 @@ impl Chat {
     }
 
     fn save(&self, cfg: &Config) {
-        let Some(id) = &self.session_id else { return };
-        LastChat {
-            session_id: id.clone(),
+        let (Some(id), Some(session)) = (&self.chat_id, &self.session_id) else {
+            return;
+        };
+        let _ = SavedChat {
+            id: id.clone(),
+            session_id: session.clone(),
             working_dir: self.session_dir.clone(),
             model: cfg.model.clone(),
             updated: chrono::Local::now().timestamp(),
@@ -134,21 +148,28 @@ impl Chat {
         .save();
     }
 
+    /// The working directory of the next prompt: the directory of the
+    /// session, or the configured directory for a new conversation.
+    fn prompt_dir(&self, cfg: &Config) -> Option<PathBuf> {
+        if self.session_id.is_some() {
+            self.session_dir.clone()
+        } else {
+            cfg.working_dir()
+        }
+    }
+
     fn send(&mut self, cfg: &Config, ctx: &egui::Context) {
         let prompt = self.input.trim().to_owned();
         if prompt.is_empty() || self.run.is_some() {
             return;
         }
         self.question = None;
-        let dir = cfg.working_dir();
-        if self.session_id.is_some() && self.session_dir != dir {
-            self.messages.push(Message::new(
-                Role::Note,
-                "The working directory changed. This prompt starts a new conversation.",
-            ));
-            self.session_id = None;
-        }
+        self.history = None;
+        let dir = self.prompt_dir(cfg);
         self.session_dir = dir.clone();
+        if self.chat_id.is_none() {
+            self.chat_id = Some(SavedChat::new_id());
+        }
         self.messages.push(Message::new(Role::User, prompt.clone()));
         self.input.clear();
         let req = Request {
@@ -175,19 +196,106 @@ impl Chat {
     fn new_chat(&mut self) {
         self.run = None;
         self.messages.clear();
+        self.chat_id = None;
         self.session_id = None;
         self.session_dir = None;
         self.question = None;
+        self.history = None;
         self.focus_input = true;
-        LastChat::delete();
     }
 
-    fn continue_last(&mut self) {
-        if let Some(lc) = self.question.take() {
-            self.messages = lc.messages;
-            self.session_id = Some(lc.session_id);
-            self.session_dir = lc.working_dir;
-            self.focus_input = true;
+    /// Opens a stored chat. The next prompt continues its conversation.
+    fn open(&mut self, chat: SavedChat) {
+        self.run = None;
+        self.messages = chat.messages;
+        self.chat_id = Some(chat.id);
+        self.session_id = Some(chat.session_id);
+        self.session_dir = chat.working_dir;
+        self.question = None;
+        self.history = None;
+        self.focus_input = true;
+    }
+
+    fn toggle_history(&mut self) {
+        self.history = match self.history {
+            Some(_) => None,
+            None => Some(History {
+                chats: SavedChat::list(),
+                query: String::new(),
+            }),
+        };
+    }
+
+    /// The list of the stored chats, with a search field. A click on a chat
+    /// opens it.
+    fn history_ui(&mut self, ui: &mut Ui) {
+        let Some(h) = &mut self.history else { return };
+        let running = self.run.is_some();
+        let mut open = None;
+        let mut delete = None;
+        ui.add_space(8.0);
+        ui.add(
+            egui::TextEdit::singleline(&mut h.query)
+                .hint_text("Search")
+                .desired_width(f32::INFINITY),
+        );
+        if h.chats.is_empty() {
+            ui.add_space(8.0);
+            ui.label(RichText::new("No stored chats.").weak());
+        }
+        for (i, c) in h.chats.iter().enumerate() {
+            if !c.matches(&h.query) {
+                continue;
+            }
+            ui.add_space(6.0);
+            let current = self.chat_id.as_ref() == Some(&c.id);
+            ui.horizontal(|ui| {
+                ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+                    if ui.small_button("×").on_hover_text("Delete").clicked() {
+                        delete = Some(i);
+                    }
+                    ui.with_layout(Layout::top_down(Align::Min), |ui| {
+                        let title = ui
+                            .add_enabled(
+                                !running,
+                                egui::Button::selectable(
+                                    current,
+                                    RichText::new(c.title()).strong(),
+                                )
+                                .truncate(),
+                            )
+                            .on_hover_text("Open and continue this chat")
+                            .on_disabled_hover_text("Stop the running prompt first");
+                        if title.clicked() {
+                            open = Some(i);
+                        }
+                        let dir = c
+                            .working_dir
+                            .as_ref()
+                            .map(|d| d.display().to_string())
+                            .unwrap_or_default();
+                        ui.label(
+                            RichText::new(format!(
+                                "{} · {} messages · {dir}",
+                                c.updated_text(),
+                                c.messages.len()
+                            ))
+                            .weak()
+                            .small(),
+                        );
+                    });
+                });
+            });
+        }
+        if let Some(i) = delete {
+            let c = h.chats.remove(i);
+            SavedChat::delete(&c.id);
+            if self.chat_id.as_ref() == Some(&c.id) {
+                self.chat_id = Some(SavedChat::new_id());
+            }
+        } else if let Some(i) = open {
+            let c = h.chats.remove(i);
+            self.open(c);
         }
     }
 
@@ -214,6 +322,13 @@ impl Chat {
                     .on_hover_text("Model for the next prompt");
                 if ui.button("New chat").clicked() {
                     self.new_chat();
+                }
+                if ui
+                    .selectable_label(self.history.is_some(), "History")
+                    .on_hover_text("Stored chats")
+                    .clicked()
+                {
+                    self.toggle_history();
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui.button("×").on_hover_text("Close (Esc)").clicked() {
@@ -266,8 +381,8 @@ impl Chat {
                     }
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let dir = cfg
-                        .working_dir()
+                    let dir = self
+                        .prompt_dir(cfg)
                         .map(|d| d.display().to_string())
                         .unwrap_or_default();
                     ui.label(RichText::new(dir).weak().small());
@@ -277,6 +392,13 @@ impl Chat {
         });
 
         egui::CentralPanel::default().show(ui, |ui| {
+            if self.history.is_some() {
+                egui::ScrollArea::vertical()
+                    .id_salt("history")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| self.history_ui(ui));
+                return;
+            }
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .stick_to_bottom(true)
@@ -290,8 +412,10 @@ impl Chat {
                         ui.add_space(8.0);
                         ui.label(text);
                         ui.horizontal(|ui| {
-                            if ui.button("Continue").clicked() {
-                                self.continue_last();
+                            if ui.button("Continue").clicked()
+                                && let Some(lc) = self.question.take()
+                            {
+                                self.open(lc);
                             }
                             if ui.button("New chat").clicked() {
                                 self.new_chat();

@@ -1,4 +1,5 @@
-//! The stored last chat.
+//! The stored chats. Each chat is one JSON file in the `chats` directory of
+//! the pixelpal data directory.
 
 use std::path::PathBuf;
 
@@ -32,8 +33,15 @@ impl Message {
     }
 }
 
+/// Longest title of a chat, in characters.
+const TITLE_CHARS: usize = 70;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct LastChat {
+pub struct SavedChat {
+    /// Name of the file of the chat. It stays the same when `claude` gives the
+    /// conversation a new session id.
+    #[serde(default)]
+    pub id: String,
     pub session_id: String,
     pub working_dir: Option<PathBuf>,
     pub model: String,
@@ -42,27 +50,112 @@ pub struct LastChat {
     pub messages: Vec<Message>,
 }
 
-impl LastChat {
-    fn path() -> Option<PathBuf> {
+impl SavedChat {
+    fn dir() -> Option<PathBuf> {
+        Some(dirs::data_dir()?.join("pixelpal").join("chats"))
+    }
+
+    /// The file of the single stored chat of older pixelpal versions.
+    fn legacy_path() -> Option<PathBuf> {
         Some(dirs::data_dir()?.join("pixelpal").join("last_chat.json"))
     }
 
-    pub fn load() -> Option<Self> {
-        let s = std::fs::read_to_string(Self::path()?).ok()?;
-        serde_json::from_str(&s).ok()
+    /// A new, unique chat id.
+    pub fn new_id() -> String {
+        format!(
+            "{}-{:08x}",
+            chrono::Local::now().format("%Y%m%d-%H%M%S"),
+            fastrand::u32(..)
+        )
     }
 
-    pub fn save(&self) {
-        let Some(path) = Self::path() else { return };
-        if let Ok(s) = serde_json::to_string_pretty(self) {
-            let _ = crate::files::write_atomic(&path, s.as_bytes());
+    fn path(id: &str) -> Option<PathBuf> {
+        // An id is a file name, never a path.
+        (!id.is_empty() && !id.contains(['/', '\\']) && !id.starts_with('.'))
+            .then(|| Self::dir().map(|d| d.join(format!("{id}.json"))))
+            .flatten()
+    }
+
+    /// Moves the single stored chat of older versions into the chat directory.
+    fn migrate() {
+        let Some(old) = Self::legacy_path() else {
+            return;
+        };
+        let Some(mut chat) = std::fs::read_to_string(&old)
+            .ok()
+            .and_then(|s| serde_json::from_str::<SavedChat>(&s).ok())
+        else {
+            return;
+        };
+        if chat.id.is_empty() {
+            chat.id = Self::new_id();
+        }
+        if chat.save().is_ok() {
+            let _ = std::fs::remove_file(old);
         }
     }
 
-    pub fn delete() {
-        if let Some(path) = Self::path() {
+    /// All stored chats, the most recent first.
+    pub fn list() -> Vec<SavedChat> {
+        Self::migrate();
+        let Some(entries) = Self::dir().and_then(|d| std::fs::read_dir(d).ok()) else {
+            return Vec::new();
+        };
+        let mut chats: Vec<SavedChat> = entries
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+            .filter_map(|e| {
+                let mut chat: SavedChat =
+                    serde_json::from_str(&std::fs::read_to_string(e.path()).ok()?).ok()?;
+                chat.id = e.path().file_stem()?.to_string_lossy().into_owned();
+                Some(chat)
+            })
+            .collect();
+        chats.sort_by(|a, b| b.updated.cmp(&a.updated));
+        chats
+    }
+
+    /// The most recent chat in the working directory `dir`.
+    pub fn latest_in(dir: &Option<PathBuf>) -> Option<SavedChat> {
+        Self::list().into_iter().find(|c| &c.working_dir == dir)
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        let path = Self::path(&self.id).ok_or(std::io::ErrorKind::InvalidInput)?;
+        let s = serde_json::to_string_pretty(self)?;
+        crate::files::write_atomic(&path, s.as_bytes())
+    }
+
+    pub fn delete(id: &str) {
+        if let Some(path) = Self::path(id) {
             let _ = std::fs::remove_file(path);
         }
+    }
+
+    /// The first line of the first prompt, shortened.
+    pub fn title(&self) -> String {
+        let first = self
+            .messages
+            .iter()
+            .find(|m| m.role == Role::User)
+            .and_then(|m| m.text.lines().map(str::trim).find(|l| !l.is_empty()))
+            .unwrap_or("(no prompt)");
+        if first.chars().count() > TITLE_CHARS {
+            let short: String = first.chars().take(TITLE_CHARS - 1).collect();
+            format!("{short}…")
+        } else {
+            first.to_owned()
+        }
+    }
+
+    /// True if `query` occurs in a message of the chat, in any case.
+    pub fn matches(&self, query: &str) -> bool {
+        let q = query.trim().to_lowercase();
+        q.is_empty()
+            || self
+                .messages
+                .iter()
+                .any(|m| m.text.to_lowercase().contains(&q))
     }
 
     pub fn updated_text(&self) -> String {
@@ -73,5 +166,45 @@ impl LastChat {
                     .to_string()
             })
             .unwrap_or_else(|| "an unknown date".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chat(texts: &[&str]) -> SavedChat {
+        SavedChat {
+            id: "x".into(),
+            session_id: "s".into(),
+            working_dir: None,
+            model: "default".into(),
+            updated: 0,
+            messages: texts.iter().map(|t| Message::new(Role::User, *t)).collect(),
+        }
+    }
+
+    #[test]
+    fn title_is_the_first_prompt_line() {
+        assert_eq!(
+            chat(&["\n  Hello there \nmore", "b"]).title(),
+            "Hello there"
+        );
+        assert_eq!(chat(&[]).title(), "(no prompt)");
+        let long = "a".repeat(100);
+        assert_eq!(chat(&[&long]).title().chars().count(), TITLE_CHARS);
+    }
+
+    #[test]
+    fn search_ignores_case() {
+        let c = chat(&["Fix the Parser"]);
+        assert!(c.matches("parser") && c.matches("") && !c.matches("lexer"));
+    }
+
+    #[test]
+    fn ids_are_file_names() {
+        assert!(SavedChat::path("../x").is_none());
+        assert!(SavedChat::path("").is_none());
+        assert!(SavedChat::path(&SavedChat::new_id()).is_some());
     }
 }
