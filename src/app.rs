@@ -235,7 +235,9 @@ impl PalApp {
         let ctx = ui.ctx().clone();
         let resp = ui.interact(rect, Id::new("pal"), Sense::click_and_drag());
 
-        if resp.drag_started_by(PointerButton::Primary) && !self.panel_open {
+        // A drag lifts the pal. While the chat panel is open, a drag moves the
+        // pal only along the ground, and the panel follows him.
+        if resp.drag_started_by(PointerButton::Primary) {
             let offset = match self.pointer(&ctx) {
                 Some(p) => p - self.pal.pos,
                 None => resp
@@ -244,22 +246,33 @@ impl PalApp {
                     .unwrap_or_default(),
             };
             self.drag_offset = Some(offset);
-            self.pal.hold();
+            if !self.panel_open {
+                self.pal.hold();
+            }
         }
         if let Some(offset) = self.drag_offset {
             if resp.dragged_by(PointerButton::Primary) {
-                match self.pointer(&ctx) {
-                    Some(p) => self.pal.pos = p - offset,
-                    None => self.pal.pos += resp.drag_delta(),
+                let pos = match self.pointer(&ctx) {
+                    Some(p) => p - offset,
+                    None => self.pal.pos + resp.drag_delta(),
+                };
+                if self.pal.is_held() {
+                    self.pal.pos = pos;
+                } else {
+                    let max_x = (self.area.right - Pal::window_size(self.cfg.scale).x)
+                        .max(self.area.left);
+                    self.pal.pos.x = pos.x.clamp(self.area.left, max_x);
                 }
             }
             if resp.drag_stopped() || !ctx.input(|i| i.pointer.primary_down()) {
                 self.drag_offset = None;
-                // The drop may be on another monitor: find its area before the
-                // pal falls.
-                self.area_time = f64::NEG_INFINITY;
-                self.refresh_area(&ctx, ctx.input(|i| i.time));
-                self.pal.release();
+                if self.pal.is_held() {
+                    // The drop may be on another monitor: find its area before
+                    // the pal falls.
+                    self.area_time = f64::NEG_INFINITY;
+                    self.refresh_area(&ctx, ctx.input(|i| i.time));
+                    self.pal.release();
+                }
             }
         }
         if resp.clicked_by(PointerButton::Middle) {
