@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use crate::chat::{Chat, TurnEnd};
 use crate::enemy::{ENEMY_TITLE, Fight};
+use crate::hotkey::Hotkey;
 use crate::link::Sprites;
 use crate::pal::{Area, Pal, Senses};
 use crate::progress::Progress;
@@ -75,6 +76,9 @@ pub struct PalApp {
     /// The font file of the registered chat font.
     loaded_font: String,
     tray: Option<Tray>,
+    /// The grabbed chat shortcut, and the shortcut text of the last grab.
+    hotkey: Option<Hotkey>,
+    hotkey_spec: Option<String>,
     pal_visible: bool,
     /// The time at which the hidden pal window became visible again.
     revealed_at: Option<Instant>,
@@ -145,6 +149,8 @@ impl PalApp {
             settings_ui,
             loaded_font: cfg.theme.font_file.clone(),
             tray,
+            hotkey: None,
+            hotkey_spec: None,
             pal_visible: true,
             revealed_at: None,
             manage_time: f64::NEG_INFINITY,
@@ -474,15 +480,7 @@ impl PalApp {
         while let Some(cmd) = self.tray.as_ref().and_then(Tray::try_recv) {
             match cmd {
                 TrayCommand::TogglePal => self.set_pal_visible(ctx, !self.pal_visible),
-                TrayCommand::ToggleChat => {
-                    // The chat panel and the settings window need the pal window:
-                    // egui shows them only while the pal window is visible.
-                    self.set_pal_visible(ctx, true);
-                    self.panel_open = !self.panel_open;
-                    if self.panel_open {
-                        self.chat.focus_input();
-                    }
-                }
+                TrayCommand::ToggleChat => self.toggle_chat(ctx),
                 TrayCommand::OpenSettings => {
                     self.set_pal_visible(ctx, true);
                     self.open_settings();
@@ -498,6 +496,38 @@ impl PalApp {
                     }
                 }
             }
+        }
+    }
+
+    /// Opens or closes the chat panel, and shows a hidden pal.
+    fn toggle_chat(&mut self, ctx: &egui::Context) {
+        // The chat panel and the settings window need the pal window: egui
+        // shows them only while the pal window is visible.
+        self.set_pal_visible(ctx, true);
+        self.panel_open = !self.panel_open;
+        if self.panel_open {
+            self.chat.focus_input();
+        }
+    }
+
+    /// Grabs the chat shortcut of the configuration when it differs from the
+    /// last grab, and toggles the chat panel when the shortcut was pressed.
+    fn handle_hotkey(&mut self, ctx: &egui::Context) {
+        let spec = self.cfg.chat_shortcut.trim();
+        if self.hotkey_spec.as_deref() != Some(spec) {
+            self.hotkey = None;
+            self.settings_ui.shortcut_error = None;
+            if !spec.is_empty() {
+                match Hotkey::grab(spec, ctx.clone()) {
+                    Ok(h) => self.hotkey = Some(h),
+                    Err(e) => self.settings_ui.shortcut_error = Some(e),
+                }
+            }
+            self.hotkey_spec = Some(spec.to_owned());
+        }
+        if self.hotkey.as_ref().is_some_and(Hotkey::pressed) {
+            self.menu = None;
+            self.toggle_chat(ctx);
         }
     }
 
@@ -687,6 +717,7 @@ impl eframe::App for PalApp {
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_tray(ctx);
+        self.handle_hotkey(ctx);
     }
 
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {

@@ -8,6 +8,7 @@ mod claude;
 mod enemy;
 mod files;
 mod history;
+mod hotkey;
 mod link;
 mod markdown;
 mod pal;

@@ -98,6 +98,9 @@ pub struct Config {
     pub panel_width: f32,
     pub panel_height: f32,
     pub autostart: bool,
+    /// Global shortcut that opens or closes the chat panel, such as
+    /// `Super+Shift+C`. Empty means no shortcut.
+    pub chat_shortcut: String,
     pub theme: ChatTheme,
 }
 
@@ -137,6 +140,7 @@ impl Default for Config {
             panel_width: 420.0,
             panel_height: 560.0,
             autostart: false,
+            chat_shortcut: String::new(),
             theme: ChatTheme::default(),
         }
     }
@@ -303,6 +307,8 @@ pub struct SettingsUi {
     pub status: Option<String>,
     /// An error of the font file.
     pub font_error: Option<String>,
+    /// An error of the chat shortcut.
+    pub shortcut_error: Option<String>,
     /// The progress of Link, as one line.
     pub progress: String,
     /// The open file or folder dialog, if any.
@@ -606,6 +612,18 @@ impl SettingsUi {
             ui.add_space(12.0);
             ui.heading("General");
             ui.checkbox(&mut cfg.autostart, "Start pixelpal at login");
+            ui.horizontal(|ui| {
+                ui.label("Chat shortcut")
+                    .on_hover_text("A key with one or more modifiers: Ctrl, Alt, Shift, Super. The shortcut works in all programs and opens or closes the chat.");
+                ui.add(
+                    egui::TextEdit::singleline(&mut cfg.chat_shortcut)
+                        .hint_text("Super+Shift+C")
+                        .desired_width(160.0),
+                );
+            });
+            if let Some(e) = &self.shortcut_error {
+                ui.label(RichText::new(format!("Chat shortcut: {e}")).color(ui.visuals().error_fg_color));
+            }
             if let Some(s) = &self.status {
                 ui.label(RichText::new(s).color(ui.visuals().error_fg_color));
             }
