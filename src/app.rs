@@ -36,7 +36,7 @@ const REVEAL_DELAY: Duration = Duration::from_millis(300);
 const AREA_INTERVAL: f64 = 2.0;
 /// Seconds between two updates of the window states.
 const MANAGE_INTERVAL: f64 = 1.0;
-const MENU_SIZE: Vec2 = vec2(150.0, 96.0);
+const MENU_SIZE: Vec2 = vec2(150.0, 122.0);
 /// Width of the resize zones at the edges of the chat panel.
 const GRIP: f32 = 6.0;
 /// Smallest size of the chat panel.
@@ -681,6 +681,9 @@ impl PalApp {
                         if ui.button("Settings…").clicked() {
                             action = Some("settings");
                         }
+                        if ui.button("Hide").clicked() {
+                            action = Some("hide");
+                        }
                         if ui.button("Quit").clicked() {
                             action = Some("quit");
                         }
@@ -709,6 +712,7 @@ impl PalApp {
                 self.open_settings();
                 self.menu = None;
             }
+            Some("hide") => self.set_pal_visible(ctx, false),
             Some("quit") => ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Close),
             Some(_) => self.menu = None,
             None => {}
