@@ -83,6 +83,8 @@ pub struct Config {
     /// Pause between two walks, in seconds.
     pub pause_min: f32,
     pub pause_max: f32,
+    /// Time in which the pal stays in place after the chat was active, in seconds.
+    pub chat_rest: f32,
     /// Size of one sheet pixel on the screen.
     pub scale: u32,
     /// Extra distance between the feet of the pal and the bottom of the usable area.
@@ -134,6 +136,7 @@ impl Default for Config {
             walk_speed: 40.0,
             pause_min: 3.0,
             pause_max: 10.0,
+            chat_rest: 60.0,
             scale: 3,
             bottom_margin: 0.0,
             walk_stride: 2.5,
@@ -184,6 +187,7 @@ impl Config {
         self.walk_speed = fix(self.walk_speed, 5.0, 400.0, d.walk_speed);
         self.pause_min = fix(self.pause_min, 0.0, 600.0, d.pause_min);
         self.pause_max = fix(self.pause_max, 0.0, 600.0, d.pause_max);
+        self.chat_rest = fix(self.chat_rest, 0.0, 3600.0, d.chat_rest);
         self.walk_stride = fix(self.walk_stride, 0.5, 10.0, d.walk_stride);
         self.gravity = fix(self.gravity, 0.5, 100.0, d.gravity);
         self.bottom_margin = fix(self.bottom_margin, 0.0, 500.0, d.bottom_margin);
@@ -442,6 +446,10 @@ impl SettingsUi {
                     ui.label("to");
                     ui.add(DragValue::new(&mut cfg.pause_max).range(0.0..=600.0).speed(0.2).suffix(" s"));
                 });
+                ui.end_row();
+                ui.label("Rest after a chat")
+                    .on_hover_text("Link stays in place for this time after the chat panel closes or Claude answers.");
+                ui.add(DragValue::new(&mut cfg.chat_rest).range(0.0..=3600.0).speed(1.0).suffix(" s"));
                 ui.end_row();
                 ui.label("Scale");
                 ui.horizontal(|ui| {

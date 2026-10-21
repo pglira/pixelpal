@@ -70,6 +70,8 @@ pub struct PalApp {
     area_time: f64,
     chat: Chat,
     panel_open: bool,
+    /// The last time at which the chat panel was open or `claude` ran.
+    chat_active_at: f64,
     /// The edited copy of the configuration while the settings window is open.
     settings_draft: Option<Config>,
     settings_ui: SettingsUi,
@@ -145,6 +147,7 @@ impl PalApp {
             area_time: f64::NEG_INFINITY,
             chat,
             panel_open,
+            chat_active_at: f64::NEG_INFINITY,
             settings_draft: None,
             settings_ui,
             loaded_font: cfg.theme.font_file.clone(),
@@ -499,6 +502,15 @@ impl PalApp {
         }
     }
 
+    /// True if the pal may walk now: no menu is open, and the chat was not
+    /// active during the rest time of the configuration.
+    fn may_move(&mut self, now: f64) -> bool {
+        if self.panel_open || self.chat.is_running() {
+            self.chat_active_at = now;
+        }
+        self.menu.is_none() && now - self.chat_active_at >= f64::from(self.cfg.chat_rest)
+    }
+
     /// Opens or closes the chat panel, and shows a hidden pal.
     fn toggle_chat(&mut self, ctx: &egui::Context) {
         // The chat panel and the settings window need the pal window: egui
@@ -813,7 +825,7 @@ impl eframe::App for PalApp {
         let click = Pal::click_rect(rect, &self.sprites, self.cfg.scale as f32);
         self.handle_input(ui, click);
 
-        let may_move = !self.panel_open && !self.chat.is_running() && self.menu.is_none();
+        let may_move = self.may_move(now);
         let senses = self.senses(&ctx, now, may_move);
         self.pal.update(
             now,
@@ -888,7 +900,7 @@ impl eframe::App for PalApp {
         // Repaint when the pal changes, and at least once per second for the
         // periodic checks (monitor area, window states, idle time, night).
         // Input events, the tray and the `claude` reader repaint at once.
-        let may_move = !self.panel_open && !self.chat.is_running() && self.menu.is_none();
+        let may_move = self.may_move(now);
         let ppp = Self::pixels_per_point(&ctx);
         let mut next = self
             .pal
