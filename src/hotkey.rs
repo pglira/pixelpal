@@ -168,6 +168,36 @@ impl Hotkey {
     }
 }
 
+/// A shortcut of the configuration and its grab. The grab follows changes of
+/// the shortcut text.
+#[derive(Default)]
+pub struct Binding {
+    hotkey: Option<Hotkey>,
+    /// The shortcut text of the last grab.
+    spec: Option<String>,
+}
+
+impl Binding {
+    /// Grabs `spec` when it differs from the last grab, and writes the error
+    /// of the grab to `error`. Returns true if the shortcut was pressed since
+    /// the last call. An empty `spec` means no shortcut.
+    pub fn poll(&mut self, spec: &str, ctx: &egui::Context, error: &mut Option<String>) -> bool {
+        let spec = spec.trim();
+        if self.spec.as_deref() != Some(spec) {
+            self.hotkey = None;
+            *error = None;
+            if !spec.is_empty() {
+                match Hotkey::grab(spec, ctx.clone()) {
+                    Ok(h) => self.hotkey = Some(h),
+                    Err(e) => *error = Some(e),
+                }
+            }
+            self.spec = Some(spec.to_owned());
+        }
+        self.hotkey.as_ref().is_some_and(Hotkey::pressed)
+    }
+}
+
 impl Drop for Hotkey {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
