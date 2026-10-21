@@ -502,13 +502,16 @@ impl PalApp {
         }
     }
 
-    /// True if the pal may walk now: no menu is open, and the chat was not
-    /// active during the rest time of the configuration.
+    /// True if the pal may walk now: the pal is visible, no menu is open, and
+    /// the chat was not active during the rest time of the configuration.
+    /// Enemies come only while the pal may walk.
     fn may_move(&mut self, now: f64) -> bool {
         if self.panel_open || self.chat.is_running() {
             self.chat_active_at = now;
         }
-        self.menu.is_none() && now - self.chat_active_at >= f64::from(self.cfg.chat_rest)
+        self.pal_visible
+            && self.menu.is_none()
+            && now - self.chat_active_at >= f64::from(self.cfg.chat_rest)
     }
 
     /// Opens or closes the chat panel, and shows a hidden pal.
@@ -868,13 +871,14 @@ impl eframe::App for PalApp {
             now,
             true,
         );
-        self.show_enemy(&ctx, now, night);
 
         // egui shows child windows only while the pal window is visible. After
         // the hidden pal window becomes visible again, this takes some time.
+        // An immediate child window of a hidden pal window panics in egui.
         let ready =
             self.pal_visible && self.revealed_at.is_none_or(|t| t.elapsed() >= REVEAL_DELAY);
         if ready {
+            self.show_enemy(&ctx, now, night);
             if self.panel_open {
                 self.show_panel(&ctx);
             }
@@ -885,6 +889,7 @@ impl eframe::App for PalApp {
                 self.show_settings(&ctx);
             }
         } else {
+            self.enemy_pos = None;
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
         self.update_focus(now);
