@@ -30,6 +30,10 @@ const WINDOW_TITLES: [&str; 3] = [CHAT_TITLE, MENU_TITLE, SETTINGS_TITLE];
 const FOCUS_SECONDS: f64 = 3.0;
 /// Seconds between two activation requests.
 const FOCUS_INTERVAL: f64 = 0.2;
+/// Seconds during which a new window must keep the keyboard focus. The window
+/// manager can give the focus back to the last window shortly after it
+/// activated the new window.
+const FOCUS_STABLE: f64 = 0.6;
 /// Time between showing the hidden pal window and showing its child windows.
 const REVEAL_DELAY: Duration = Duration::from_millis(300);
 /// Seconds between two queries of the usable area.
@@ -60,6 +64,15 @@ struct PanelResize {
     window: Option<u32>,
 }
 
+/// A window that pixelpal activates until it keeps the keyboard focus.
+struct FocusRequest {
+    title: &'static str,
+    /// The time until which pixelpal tries to activate the window.
+    until: f64,
+    /// The time since which the window has the focus without a break.
+    active_since: Option<f64>,
+}
+
 pub struct PalApp {
     cfg: Config,
     saved_cfg: Config,
@@ -85,9 +98,8 @@ pub struct PalApp {
     /// The time at which the hidden pal window became visible again.
     revealed_at: Option<Instant>,
     manage_time: f64,
-    /// Windows that do not have the keyboard focus yet, with the time until
-    /// which pixelpal tries to activate them.
-    focus_pending: Vec<(&'static str, f64)>,
+    /// Windows that do not have a stable keyboard focus yet.
+    focus_pending: Vec<FocusRequest>,
     focus_time: f64,
     /// Open state of the windows in `WINDOW_TITLES` in the last frame.
     was_open: [bool; 3],
@@ -431,10 +443,13 @@ impl PalApp {
         }
     }
 
-    /// Activates the windows that opened but do not have the keyboard focus yet.
+    /// Activates the windows that opened until they keep the keyboard focus for
+    /// `FOCUS_STABLE` seconds.
     ///
     /// A click on the pal gives the pal window the focus, and the window manager
     /// does not always move the focus to a window that opens after the click.
+    /// After a global shortcut, the window manager can give the focus back to
+    /// the last window shortly after it activated the new window.
     fn update_focus(&mut self, now: f64) {
         let open = [
             self.panel_open,
@@ -443,11 +458,15 @@ impl PalApp {
         ];
         for (i, title) in WINDOW_TITLES.iter().enumerate() {
             if open[i] && !self.was_open[i] {
-                self.focus_pending.retain(|(t, _)| t != title);
-                self.focus_pending.push((title, now + FOCUS_SECONDS));
+                self.focus_pending.retain(|r| r.title != *title);
+                self.focus_pending.push(FocusRequest {
+                    title,
+                    until: now + FOCUS_SECONDS,
+                    active_since: None,
+                });
             }
             if !open[i] {
-                self.focus_pending.retain(|(t, _)| t != title);
+                self.focus_pending.retain(|r| r.title != *title);
             }
         }
         self.was_open = open;
@@ -459,17 +478,21 @@ impl PalApp {
             return;
         }
         self.focus_time = now;
-        for (title, until) in &mut self.focus_pending {
-            let Some(win) = x.find_window(std::process::id(), title) else {
+        for r in &mut self.focus_pending {
+            let Some(win) = x.find_window(std::process::id(), r.title) else {
                 continue;
             };
             if x.active_window() == Some(win) {
-                *until = now;
+                let since = *r.active_since.get_or_insert(now);
+                if now - since >= FOCUS_STABLE {
+                    r.until = now;
+                }
             } else {
+                r.active_since = None;
                 x.activate(win);
             }
         }
-        self.focus_pending.retain(|(_, until)| *until > now);
+        self.focus_pending.retain(|r| r.until > now);
     }
 
     /// Shows or hides the pal. A hidden pal has no open chat panel and no menu.
