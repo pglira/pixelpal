@@ -192,6 +192,7 @@ impl PalApp {
         if !self.pal.is_held() {
             center.y = center.y.clamp(self.area.top, self.area.bottom - 1.0);
         }
+        let old_area = self.area;
         if let Some(r) = self
             .x11
             .as_ref()
@@ -210,6 +211,16 @@ impl PalApp {
                 right: m.x,
                 bottom: m.y,
             };
+        }
+        // The window manager can move the pal window, for example when a
+        // monitor is added or removed. Then the window is not at the position
+        // of the pal, and the position must be sent again.
+        let moved = ctx
+            .input(|i| i.viewport().outer_rect)
+            .zip(self.sent_pos)
+            .is_some_and(|(r, p)| (r.min - p).length() > 1.0);
+        if self.area != old_area || moved {
+            self.sent_pos = None;
         }
     }
 

@@ -545,7 +545,14 @@ impl Pal {
         }
 
         match self.motion {
-            Motion::Held | Motion::Sleep => return,
+            Motion::Held => return,
+            Motion::Sleep => {
+                // The area can change during the sleep, for example with a
+                // new monitor layout. The pal stays asleep on the new ground.
+                self.pos.x = self.pos.x.clamp(min_x, max_x);
+                self.pos.y = ground;
+                return;
+            }
             Motion::Bonk { start, away } => {
                 let t = (now - start) as f32;
                 if t < bonk_first_arc() {
@@ -1171,6 +1178,34 @@ mod tests {
         );
         assert!(matches!(pal.motion, Motion::Stand { .. }));
         assert!(pal.pos.x + size.x <= area.right && pal.pos.x < edge_x);
+    }
+
+    #[test]
+    fn sleeping_pal_stays_on_the_ground_of_a_new_area() {
+        let sprites = Sprites::load(&egui::Context::default(), 0);
+        let cfg = Config {
+            idle_sleep: true,
+            day_night: false,
+            ..Config::default()
+        };
+        let senses = Senses {
+            idle: Some(std::time::Duration::from_secs(24 * 3600)),
+            ..Senses::default()
+        };
+        let size = Pal::window_size(cfg.scale);
+        let mut pal = Pal::new(pos2(1500.0, 1000.0));
+        pal.motion = Motion::Sleep;
+        // A smaller monitor: the old position is right of and below the area.
+        let area = Area {
+            left: 0.0,
+            top: 0.0,
+            right: 1000.0,
+            bottom: 600.0,
+        };
+        pal.update(0.0, 1.0 / 60.0, area, &cfg, &sprites, true, &senses);
+        assert!(matches!(pal.motion, Motion::Sleep));
+        assert_eq!(pal.pos.y, area.bottom - size.y - cfg.bottom_margin);
+        assert!(pal.pos.x + size.x <= area.right);
     }
 
     #[test]
