@@ -385,6 +385,9 @@ impl Chat {
             out.close_panel = true;
         }
         self.handle_paste(&ctx);
+        if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::L)) {
+            self.new_chat();
+        }
 
         egui::Panel::top("chat_header").show(ui, |ui| {
             ui.add_space(4.0);
@@ -399,7 +402,7 @@ impl Chat {
                     })
                     .response
                     .on_hover_text("Model for the next prompt");
-                if ui.button("New chat").clicked() {
+                if ui.button("New chat").on_hover_text("Ctrl+L").clicked() {
                     self.new_chat();
                 }
                 if ui
