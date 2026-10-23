@@ -1,7 +1,8 @@
 //! Runs one prompt through the `claude` CLI and streams the reply.
 //!
-//! The runner starts `claude -p` with `--output-format stream-json`, writes the
-//! prompt to stdin, and parses stdout line by line on a reader thread.
+//! The runner starts `claude -p` with `--input-format stream-json` and
+//! `--output-format stream-json`, writes the prompt as one user message to
+//! stdin, and parses stdout line by line on a reader thread.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
@@ -10,7 +11,7 @@ use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 pub struct Request {
     pub program: String,
@@ -21,6 +22,32 @@ pub struct Request {
     pub extra_args: Vec<String>,
     pub resume: Option<String>,
     pub prompt: String,
+    /// PNG files that go with the prompt.
+    pub images: Vec<PathBuf>,
+}
+
+/// The JSON line of the user message with the text `prompt` and the PNG files
+/// `images`. An empty text gives no text block.
+fn user_message(prompt: &str, images: &[PathBuf]) -> Result<String, String> {
+    let mut content = Vec::new();
+    if !prompt.is_empty() {
+        content.push(json!({ "type": "text", "text": prompt }));
+    }
+    for path in images {
+        content.push(json!({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": crate::images::base64_png(path)?,
+            },
+        }));
+    }
+    let msg = json!({
+        "type": "user",
+        "message": { "role": "user", "content": content },
+    });
+    Ok(format!("{msg}\n"))
 }
 
 #[derive(Debug)]
@@ -45,9 +72,12 @@ pub struct Run {
 
 impl Run {
     pub fn start(req: Request, ctx: egui::Context) -> Result<Self, String> {
+        let message = user_message(&req.prompt, &req.images)?;
         let mut cmd = Command::new(&req.program);
         cmd.args([
             "-p",
+            "--input-format",
+            "stream-json",
             "--output-format",
             "stream-json",
             "--verbose",
@@ -73,11 +103,10 @@ impl Run {
         let mut stdin = child.stdin.take().expect("stdin is piped");
         let stdout = child.stdout.take().expect("stdout is piped");
         let mut stderr = child.stderr.take().expect("stderr is piped");
-        let prompt = req.prompt;
         // The prompt goes through stdin, so that variadic flags such as
-        // `--allowedTools` cannot consume it.
+        // `--allowedTools` cannot consume it. The end of stdin ends the input.
         thread::spawn(move || {
-            let _ = stdin.write_all(prompt.as_bytes());
+            let _ = stdin.write_all(message.as_bytes());
         });
         let stderr_text = thread::spawn(move || {
             let mut s = String::new();
@@ -262,6 +291,16 @@ mod tests {
             p.line(l, &|e| events.borrow_mut().push(format!("{e:?}")));
         }
         events.into_inner()
+    }
+
+    #[test]
+    fn user_message_has_a_text_block() {
+        let line = user_message("Hi \"you\"", &[]).unwrap();
+        assert!(line.ends_with('\n'));
+        let v: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(v["type"], "user");
+        assert_eq!(v["message"]["content"][0]["text"], "Hi \"you\"");
+        assert!(user_message("x", &["/no/such.png".into()]).is_err());
     }
 
     #[test]

@@ -2,14 +2,17 @@
 
 use std::path::PathBuf;
 
+use egui::load::SizedTexture;
 use egui::{Align, Color32, ComboBox, Frame, Id, Key, Layout, Margin, Modifiers, RichText, Ui};
 use egui_commonmark::CommonMarkCache;
 
 use crate::claude::{Event, Request, Run};
 use crate::history::{Message, Role, SavedChat};
+use crate::images::{self, Thumbnails};
 use crate::settings::Config;
 
 const INPUT_ID: &str = "prompt_input";
+const ERROR_COLOR: Color32 = Color32::from_rgb(220, 70, 70);
 
 /// What the app must do after a frame of the chat.
 #[derive(Default)]
@@ -51,11 +54,22 @@ pub struct Chat {
     cache: CommonMarkCache,
     history: Option<History>,
     focus_input: bool,
+    /// PNG files of the images for the next prompt.
+    attachments: Vec<PathBuf>,
+    /// The error of the last image paste.
+    attach_error: Option<String>,
+    thumbnails: Thumbnails,
+    /// True between a press and a release of V that egui reports.
+    v_down: bool,
+    /// True if egui pasted text since the last release of V.
+    pasted_text: bool,
 }
 
 impl Chat {
-    /// Creates an empty chat. Stored chats open from the history.
+    /// Creates an empty chat. Stored chats open from the history. Removes the
+    /// stored images that no stored chat uses.
     pub fn new() -> Self {
+        images::prune(&SavedChat::list());
         Self {
             messages: Vec::new(),
             input: String::new(),
@@ -67,6 +81,11 @@ impl Chat {
             cache: CommonMarkCache::default(),
             history: None,
             focus_input: true,
+            attachments: Vec::new(),
+            attach_error: None,
+            thumbnails: Thumbnails::default(),
+            v_down: false,
+            pasted_text: false,
         }
     }
 
@@ -149,18 +168,27 @@ impl Chat {
         }
     }
 
+    /// True if the input has text or images.
+    fn can_send(&self) -> bool {
+        !self.input.trim().is_empty() || !self.attachments.is_empty()
+    }
+
     fn send(&mut self, cfg: &Config, ctx: &egui::Context) {
-        let prompt = self.input.trim().to_owned();
-        if prompt.is_empty() || self.run.is_some() {
+        if !self.can_send() || self.run.is_some() {
             return;
         }
+        let prompt = self.input.trim().to_owned();
+        let images = std::mem::take(&mut self.attachments);
+        self.attach_error = None;
         self.history = None;
         let dir = self.prompt_dir(cfg);
         self.session_dir = dir.clone();
         if self.chat_id.is_none() {
             self.chat_id = Some(SavedChat::new_id());
         }
-        self.messages.push(Message::new(Role::User, prompt.clone()));
+        let mut message = Message::new(Role::User, prompt.clone());
+        message.images = images.clone();
+        self.messages.push(message);
         self.input.clear();
         let req = Request {
             program: cfg.claude_path.trim().to_owned(),
@@ -169,6 +197,7 @@ impl Chat {
             extra_args: cfg.permission_args(),
             resume: self.session_id.clone(),
             prompt,
+            images,
         };
         match Run::start(req, ctx.clone()) {
             Ok(run) => self.run = Some(run),
@@ -202,6 +231,67 @@ impl Chat {
         self.session_dir = chat.working_dir;
         self.history = None;
         self.focus_input = true;
+    }
+
+    /// Attaches the image of the clipboard after a paste shortcut.
+    ///
+    /// egui reports a paste shortcut only as pasted text. A paste shortcut
+    /// without text on the clipboard gives no event, but the release of its V
+    /// key comes without a press of V.
+    fn handle_paste(&mut self, ctx: &egui::Context) {
+        let mut paste = false;
+        ctx.input(|i| {
+            for e in &i.events {
+                match e {
+                    egui::Event::Paste(_) => self.pasted_text = true,
+                    egui::Event::Key {
+                        key: Key::V,
+                        pressed,
+                        ..
+                    } => {
+                        if !*pressed {
+                            paste = !self.v_down && !self.pasted_text;
+                            self.pasted_text = false;
+                        }
+                        self.v_down = *pressed;
+                    }
+                    _ => {}
+                }
+            }
+        });
+        if !paste {
+            return;
+        }
+        match images::paste() {
+            Ok(Some(path)) => {
+                self.attach_error = None;
+                if !self.attachments.contains(&path) {
+                    self.attachments.push(path);
+                }
+            }
+            Ok(None) => {}
+            Err(e) => self.attach_error = Some(e),
+        }
+    }
+
+    /// The images for the next prompt, each with a button that removes it.
+    fn attachments_ui(&mut self, ui: &mut Ui) {
+        let mut remove = None;
+        let thumbnails = &mut self.thumbnails;
+        ui.horizontal_wrapped(|ui| {
+            for (i, path) in self.attachments.iter().enumerate() {
+                image_ui(ui, thumbnails, path, 48.0);
+                if ui.small_button("×").on_hover_text("Remove").clicked() {
+                    remove = Some(i);
+                }
+            }
+        });
+        if let Some(i) = remove {
+            self.attachments.remove(i);
+        }
+        if let Some(e) = &self.attach_error {
+            ui.label(RichText::new(e).color(ERROR_COLOR).small());
+        }
     }
 
     fn toggle_history(&mut self) {
@@ -294,6 +384,7 @@ impl Chat {
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
             out.close_panel = true;
         }
+        self.handle_paste(&ctx);
 
         egui::Panel::top("chat_header").show(ui, |ui| {
             ui.add_space(4.0);
@@ -332,6 +423,10 @@ impl Chat {
 
         egui::Panel::bottom("chat_input").show(ui, |ui| {
             ui.add_space(6.0);
+            if !self.attachments.is_empty() || self.attach_error.is_some() {
+                self.attachments_ui(ui);
+                ui.add_space(4.0);
+            }
             let id = Id::new(INPUT_ID);
             let enter = ui.memory(|m| m.has_focus(id))
                 && ui.input_mut(|i| {
@@ -344,7 +439,7 @@ impl Chat {
                     .id(id)
                     .desired_rows(3)
                     .desired_width(f32::INFINITY)
-                    .hint_text("Prompt (Enter: send, Shift+Enter: new line)"),
+                    .hint_text("Prompt (Enter: send, Shift+Enter: new line, Ctrl+V: image)"),
             );
             if self.focus_input {
                 edit.request_focus();
@@ -357,7 +452,7 @@ impl Chat {
                     }
                     ui.spinner();
                 } else {
-                    let can_send = !self.input.trim().is_empty();
+                    let can_send = self.can_send();
                     if (ui
                         .add_enabled(can_send, egui::Button::new("Send"))
                         .clicked()
@@ -406,7 +501,16 @@ impl Chat {
                                     .inner_margin(Margin::same(8))
                                     .show(ui, |ui| {
                                         ui.set_width(ui.available_width());
-                                        ui.add(egui::Label::new(&m.text).selectable(true));
+                                        if !m.text.is_empty() {
+                                            ui.add(egui::Label::new(&m.text).selectable(true));
+                                        }
+                                        if !m.images.is_empty() {
+                                            ui.horizontal_wrapped(|ui| {
+                                                for path in &m.images {
+                                                    image_ui(ui, &mut self.thumbnails, path, 120.0);
+                                                }
+                                            });
+                                        }
                                     });
                             }
                             Role::Assistant => {
@@ -418,9 +522,7 @@ impl Chat {
                                 ui.label(RichText::new(&m.text).italics().weak().small());
                             }
                             Role::Error => {
-                                ui.label(
-                                    RichText::new(&m.text).color(Color32::from_rgb(220, 70, 70)),
-                                );
+                                ui.label(RichText::new(&m.text).color(ERROR_COLOR));
                             }
                         }
                     }
@@ -441,4 +543,18 @@ impl Chat {
         });
         out
     }
+}
+
+/// The image of the PNG file `path`, at most `max_height` high. A file that
+/// cannot be loaded shows as a text.
+fn image_ui(ui: &mut Ui, thumbnails: &mut Thumbnails, path: &std::path::Path, max_height: f32) {
+    let resp = match thumbnails.get(ui.ctx(), path) {
+        Some(tex) => ui.add(
+            egui::Image::from_texture(SizedTexture::from_handle(tex))
+                .max_height(max_height)
+                .max_width(ui.available_width()),
+        ),
+        None => ui.label(RichText::new("(missing image)").weak()),
+    };
+    resp.on_hover_text(path.display().to_string());
 }

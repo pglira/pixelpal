@@ -9,6 +9,7 @@ mod enemy;
 mod files;
 mod history;
 mod hotkey;
+mod images;
 mod link;
 mod markdown;
 mod pal;

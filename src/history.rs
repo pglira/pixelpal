@@ -19,6 +19,9 @@ pub enum Role {
 pub struct Message {
     pub role: Role,
     pub text: String,
+    /// PNG files of the images of a prompt.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<PathBuf>,
     /// Unix time in seconds.
     pub time: i64,
 }
@@ -28,6 +31,7 @@ impl Message {
         Self {
             role,
             text: text.into(),
+            images: Vec::new(),
             time: chrono::Local::now().timestamp(),
         }
     }
@@ -127,14 +131,16 @@ impl SavedChat {
         }
     }
 
-    /// The first line of the first prompt, shortened.
+    /// The first line of the first prompt, shortened. A first prompt with
+    /// only images gives "(image)".
     pub fn title(&self) -> String {
-        let first = self
-            .messages
-            .iter()
-            .find(|m| m.role == Role::User)
+        let prompt = self.messages.iter().find(|m| m.role == Role::User);
+        let first = prompt
             .and_then(|m| m.text.lines().map(str::trim).find(|l| !l.is_empty()))
-            .unwrap_or("(no prompt)");
+            .unwrap_or(match prompt {
+                Some(m) if !m.images.is_empty() => "(image)",
+                _ => "(no prompt)",
+            });
         if first.chars().count() > TITLE_CHARS {
             let short: String = first.chars().take(TITLE_CHARS - 1).collect();
             format!("{short}…")
