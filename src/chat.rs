@@ -49,17 +49,13 @@ pub struct Chat {
     /// Tool events since the last `take_tool_activity`.
     tool_activity: Vec<ToolActivity>,
     cache: CommonMarkCache,
-    /// The last chat of the working directory, while the start question is open.
-    question: Option<SavedChat>,
     history: Option<History>,
     focus_input: bool,
 }
 
 impl Chat {
-    /// Creates the chat. If a stored chat for the current working directory
-    /// exists, the chat asks whether to continue the most recent one.
-    pub fn new(cfg: &Config) -> Self {
-        let question = SavedChat::latest_in(&cfg.working_dir());
+    /// Creates an empty chat. Stored chats open from the history.
+    pub fn new() -> Self {
         Self {
             messages: Vec::new(),
             input: String::new(),
@@ -69,14 +65,9 @@ impl Chat {
             run: None,
             tool_activity: Vec::new(),
             cache: CommonMarkCache::default(),
-            question,
             history: None,
             focus_input: true,
         }
-    }
-
-    pub fn has_question(&self) -> bool {
-        self.question.is_some()
     }
 
     pub fn is_running(&self) -> bool {
@@ -163,7 +154,6 @@ impl Chat {
         if prompt.is_empty() || self.run.is_some() {
             return;
         }
-        self.question = None;
         self.history = None;
         let dir = self.prompt_dir(cfg);
         self.session_dir = dir.clone();
@@ -199,7 +189,6 @@ impl Chat {
         self.chat_id = None;
         self.session_id = None;
         self.session_dir = None;
-        self.question = None;
         self.history = None;
         self.focus_input = true;
     }
@@ -211,7 +200,6 @@ impl Chat {
         self.chat_id = Some(chat.id);
         self.session_id = Some(chat.session_id);
         self.session_dir = chat.working_dir;
-        self.question = None;
         self.history = None;
         self.focus_input = true;
     }
@@ -403,26 +391,6 @@ impl Chat {
                 .auto_shrink([false, false])
                 .stick_to_bottom(true)
                 .show(ui, |ui| {
-                    if let Some(lc) = &self.question {
-                        let text = format!(
-                            "Continue the last chat from {} ({} messages)?",
-                            lc.updated_text(),
-                            lc.messages.len()
-                        );
-                        ui.add_space(8.0);
-                        ui.label(text);
-                        ui.horizontal(|ui| {
-                            if ui.button("Continue").clicked()
-                                && let Some(lc) = self.question.take()
-                            {
-                                self.open(lc);
-                            }
-                            if ui.button("New chat").clicked() {
-                                self.new_chat();
-                            }
-                        });
-                        return;
-                    }
                     if self.messages.is_empty() {
                         ui.add_space(8.0);
                         ui.label(RichText::new("Ask me something.").weak());

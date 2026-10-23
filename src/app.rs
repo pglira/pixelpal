@@ -120,8 +120,7 @@ impl PalApp {
         start: Pos2,
         area: Area,
     ) -> Self {
-        let chat = Chat::new(&cfg);
-        let panel_open = chat.has_question();
+        let chat = Chat::new();
         let mut settings_ui = SettingsUi::default();
         settings_ui.status = cfg_error;
         settings_ui.font_error = theme::set_fonts(&cc.egui_ctx, &cfg.theme.font_file).err();
@@ -146,7 +145,7 @@ impl PalApp {
             area,
             area_time: f64::NEG_INFINITY,
             chat,
-            panel_open,
+            panel_open: false,
             chat_active_at: f64::NEG_INFINITY,
             settings_draft: None,
             settings_ui,

@@ -115,11 +115,6 @@ impl SavedChat {
         chats
     }
 
-    /// The most recent chat in the working directory `dir`.
-    pub fn latest_in(dir: &Option<PathBuf>) -> Option<SavedChat> {
-        Self::list().into_iter().find(|c| &c.working_dir == dir)
-    }
-
     pub fn save(&self) -> std::io::Result<()> {
         let path = Self::path(&self.id).ok_or(std::io::ErrorKind::InvalidInput)?;
         let s = serde_json::to_string_pretty(self)?;
