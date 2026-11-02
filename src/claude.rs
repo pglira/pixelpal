@@ -18,7 +18,7 @@ pub struct Request {
     pub working_dir: Option<PathBuf>,
     /// `None` uses the default model of Claude Code.
     pub model: Option<String>,
-    /// Permission and tool flags.
+    /// Permission, tool and system prompt flags.
     pub extra_args: Vec<String>,
     pub resume: Option<String>,
     pub prompt: String,

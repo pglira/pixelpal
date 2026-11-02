@@ -99,6 +99,9 @@ pub struct Config {
     pub permission: Permission,
     /// Space-separated tools for `Permission::Custom`.
     pub custom_tools: String,
+    /// Instructions that `claude` gets as an addition to its system prompt
+    /// in each chat. Empty means no instructions.
+    pub instructions: String,
     /// Models in the selector of the chat panel. `default` means no `--model` flag.
     pub models: Vec<String>,
     pub model: String,
@@ -145,6 +148,7 @@ impl Default for Config {
             working_dir: String::new(),
             permission: Permission::ChatOnly,
             custom_tools: String::new(),
+            instructions: String::new(),
             models: ["default", "opus", "sonnet", "haiku"]
                 .map(String::from)
                 .to_vec(),
@@ -282,6 +286,18 @@ impl Config {
                     vec!["--allowedTools".into(), list.to_owned()]
                 }
             }
+        }
+    }
+
+    /// The flag that adds the custom instructions to the system prompt of
+    /// `claude`. Empty instructions give no flag. The flag and the text are
+    /// one argument, so that a text that starts with `-` stays a value.
+    pub fn instruction_args(&self) -> Vec<String> {
+        let text = self.instructions.trim();
+        if text.is_empty() {
+            Vec::new()
+        } else {
+            vec![format!("--append-system-prompt={text}")]
         }
     }
 
@@ -539,6 +555,16 @@ impl SettingsUi {
             }
 
             ui.add_space(8.0);
+            ui.label("Instructions")
+                .on_hover_text("Claude reads these instructions in each chat, in addition to its system prompt. A change applies to the next message.");
+            ui.add(
+                egui::TextEdit::multiline(&mut cfg.instructions)
+                    .hint_text("Answer in short sentences.")
+                    .desired_rows(4)
+                    .desired_width(f32::INFINITY),
+            );
+
+            ui.add_space(8.0);
             ui.label("Models in the chat panel");
             let mut remove = None;
             for (i, m) in cfg.models.iter().enumerate() {
@@ -720,5 +746,15 @@ mod tests {
         assert_eq!(cfg.idle_minutes, Config::default().idle_minutes);
         assert_eq!(cfg.panel_width, 280.0);
         assert!(!cfg.models.is_empty());
+    }
+
+    #[test]
+    fn instructions_go_into_the_system_prompt() {
+        let mut cfg = Config::default();
+        assert!(cfg.instruction_args().is_empty());
+        cfg.instructions = "  \n ".into();
+        assert!(cfg.instruction_args().is_empty());
+        cfg.instructions = "\nBe brief.\nUse lists.\n".into();
+        assert_eq!(cfg.instruction_args(), ["--append-system-prompt=Be brief.\nUse lists."]);
     }
 }

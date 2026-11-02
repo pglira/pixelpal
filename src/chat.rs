@@ -194,7 +194,7 @@ impl Chat {
             program: cfg.claude_path.trim().to_owned(),
             working_dir: dir,
             model: cfg.model_arg(),
-            extra_args: cfg.permission_args(),
+            extra_args: [cfg.permission_args(), cfg.instruction_args()].concat(),
             resume: self.session_id.clone(),
             prompt,
             images,

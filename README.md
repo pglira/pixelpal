@@ -38,7 +38,7 @@ The graphics belong to Nintendo, so pixelpal does not contain them. At the first
 - **Pal shortcut:** a global shortcut in the settings, such as `Super+Shift+H`, hides or shows Link.
 - **History** in the chat panel: the stored chats, with a search. A click opens a chat, and the next prompt continues it in its working directory.
 
-The settings are in `~/.config/pixelpal/config.toml`. Because `claude -p` cannot ask for permissions, a preset in the settings selects the tools of Claude: chat only, read-only, edit files, everything, or a custom list.
+The settings are in `~/.config/pixelpal/config.toml`. Because `claude -p` cannot ask for permissions, a preset in the settings selects the tools of Claude: chat only, read-only, edit files, everything, or a custom list. The **Instructions** field in the settings holds your own instructions: Claude gets them in each chat as an addition to its system prompt.
 
 ## Development
 
