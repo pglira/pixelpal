@@ -6,6 +6,7 @@
 //! each (see `pixelpal_core::ipc`). The end of stdin ends the program.
 
 mod markdown;
+mod screen_color;
 mod session;
 
 use std::collections::BTreeSet;
@@ -936,6 +937,15 @@ async fn pick(kind: String, start: String) -> Result<Option<String>, String> {
         .map_err(|e| e.to_string())?
 }
 
+/// Lets the user click a pixel on the screen and returns its color, or
+/// `None` for a cancel.
+#[tauri::command]
+async fn pick_screen_color() -> Result<Option<[u8; 3]>, String> {
+    tauri::async_runtime::spawn_blocking(screen_color::pick)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 fn close_settings(app: AppHandle) {
     close_window(&app, SETTINGS);
@@ -1030,6 +1040,7 @@ fn main() {
             get_settings,
             apply_settings,
             pick,
+            pick_screen_color,
             close_settings,
         ])
         .on_window_event(|win, event| {

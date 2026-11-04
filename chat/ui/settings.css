@@ -72,6 +72,7 @@ button {
 }
 button:hover:not(:disabled) { border-color: var(--accent); }
 button.small { padding: 0 6px; }
+button.eyedropper { height: 26px; display: inline-flex; align-items: center; }
 input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .unit, .note { color: var(--weak); }
 .note { margin: 6px 0 0; }

@@ -94,11 +94,30 @@ function radio(path, options) {
   return field;
 }
 
+/// A color field, and a button that picks the color of a pixel on the screen.
 function color(path) {
   const n = node("input", { type: "color" });
   n.oninput = () => set(path, rgb(n.value));
   loaders.push(() => (n.value = hex(get(path))));
-  return n;
+  const pickButton = node("button", { className: "small eyedropper", title: "Pick a color from the screen: click a pixel, or right-click to cancel" });
+  pickButton.innerHTML =
+    '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M11.6 1.2a1.9 1.9 0 0 1 2.7 2.7l-1.9 1.9.7.7-1.1 1.1-.7-.7-5.6 5.6H3.6l-1.3 1.3-1.1-1.1 1.3-1.3v-2.1l5.6-5.6-.7-.7 1.1-1.1.7.7 1.9-1.9zM4.2 10.6v1.2h1.2l5.4-5.4-1.2-1.2-5.4 5.4z"/></svg>';
+  pickButton.onclick = async () => {
+    pickButton.disabled = true;
+    statusLine.textContent = "";
+    try {
+      const c = await invoke("pick_screen_color");
+      if (c) {
+        set(path, c);
+        n.value = hex(c);
+      }
+    } catch (e) {
+      statusLine.textContent = String(e);
+    } finally {
+      pickButton.disabled = false;
+    }
+  };
+  return node("span", { className: "field" }, n, pickButton);
 }
 
 /// A text field for a path with a Browse button that opens a dialog.
