@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>pixelpal chat</title>
+<link rel="stylesheet" href="chat.css">
+<script src="chat.js" defer></script>
+</head>
+<body>
+<div id="panel">
+  <header>
+    <strong class="brand">pixelpal</strong>
+    <select id="model" title="Model for the next prompt"></select>
+    <button id="new-chat" title="Ctrl+L">New chat</button>
+    <button id="history-toggle" title="Stored chats">History</button>
+    <span class="grow"></span>
+    <button id="settings" class="icon" title="Settings">⚙</button>
+    <button id="close" class="icon" title="Close (Esc)">×</button>
+  </header>
+  <main id="scroll">
+    <div id="messages"></div>
+    <div id="history" hidden>
+      <input id="history-query" type="search" placeholder="Search">
+      <div id="history-list"></div>
+    </div>
+  </main>
+  <footer>
+    <div id="attachments" hidden></div>
+    <div id="attach-error" class="error small" hidden></div>
+    <textarea id="input" rows="3" placeholder="Prompt (Enter: send, Shift+Enter: new line, Ctrl+V: image)"></textarea>
+    <div class="row">
+      <button id="send">Send</button>
+      <button id="stop" hidden>Stop</button>
+      <span id="busy" class="spinner" hidden></span>
+      <span class="grow"></span>
+      <span id="dir" class="weak small"></span>
+    </div>
+  </footer>
+</div>
+<div class="grip top" data-edges="top"></div>
+<div class="grip left" data-edges="left"></div>
+<div class="grip right" data-edges="right"></div>
+<div class="grip top-left" data-edges="top left"></div>
+<div class="grip top-right" data-edges="top right"></div>
+</body>
+</html>

@@ -1,11 +1,10 @@
-//! Images of the chat: pasted from the clipboard, stored as PNG files in the
-//! `images` directory of the pixelpal data directory, and shown as thumbnails.
+//! Images of the chat, stored as PNG files in the `images` directory of the
+//! pixelpal data directory.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
-use egui::{ColorImage, TextureHandle, TextureOptions};
 use image::RgbaImage;
 use image::imageops::FilterType;
 
@@ -18,23 +17,26 @@ fn dir() -> Option<PathBuf> {
     Some(dirs::data_dir()?.join("pixelpal").join("images"))
 }
 
-/// Stores the image of the clipboard as a PNG file and returns its path.
-/// Returns `Ok(None)` if the clipboard has no image.
-pub fn paste() -> Result<Option<PathBuf>, String> {
-    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-    let data = match clipboard.get_image() {
-        Ok(data) => data,
-        Err(arboard::Error::ContentNotAvailable) => return Ok(None),
-        Err(e) => return Err(format!("Cannot read the image of the clipboard: {e}")),
-    };
-    let rgba = RgbaImage::from_raw(
-        data.width as u32,
-        data.height as u32,
-        data.bytes.into_owned(),
-    )
-    .ok_or("The image of the clipboard has an invalid size.")?;
+/// Stores `rgba` as a PNG file in the image directory and returns its path.
+pub fn store_rgba(rgba: &RgbaImage) -> Result<PathBuf, String> {
     let dir = dir().ok_or("No data directory.")?;
-    store(&dir, &rgba).map(Some)
+    store(&dir, rgba)
+}
+
+/// Stores the encoded image `data` (PNG, JPEG, GIF or WebP) as a PNG file in
+/// the image directory and returns its path.
+pub fn store_encoded(data: &[u8]) -> Result<PathBuf, String> {
+    let img = image::load_from_memory(data).map_err(|e| format!("Cannot read the image: {e}"))?;
+    store_rgba(&img.into_rgba8())
+}
+
+/// The stored image with the file name `name`. Only the names of stored
+/// images are valid: the SHA-1 in hex and the extension `.png`.
+pub fn stored(name: &str) -> Option<PathBuf> {
+    let stem = name.strip_suffix(".png")?;
+    (stem.len() == 40 && stem.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then(|| dir().map(|d| d.join(name)))
+        .flatten()
 }
 
 /// Writes `rgba` as a PNG file into `dir`, scaled down to `MAX_EDGE`. The file
@@ -83,30 +85,18 @@ pub fn prune(chats: &[SavedChat]) {
     }
 }
 
-/// The textures of the images, loaded on first use. A file that cannot be
-/// loaded has no texture.
-#[derive(Default)]
-pub struct Thumbnails {
-    textures: HashMap<PathBuf, Option<TextureHandle>>,
-}
-
-impl Thumbnails {
-    pub fn get(&mut self, ctx: &egui::Context, path: &Path) -> Option<&TextureHandle> {
-        self.textures
-            .entry(path.to_path_buf())
-            .or_insert_with(|| {
-                let img = image::open(path).ok()?.into_rgba8();
-                let size = [img.width() as usize, img.height() as usize];
-                let color = ColorImage::from_rgba_unmultiplied(size, img.as_raw());
-                Some(ctx.load_texture(path.display().to_string(), color, TextureOptions::LINEAR))
-            })
-            .as_ref()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_stored_names_are_valid() {
+        let name = format!("{}.png", "ab".repeat(20));
+        assert!(stored(&name).is_some_and(|p| p.ends_with(&name)));
+        assert!(stored("../config.png").is_none());
+        assert!(stored(&format!("{}.png", "x".repeat(40))).is_none());
+        assert!(stored(&"ab".repeat(20)).is_none());
+    }
 
     #[test]
     fn large_images_are_scaled_down() {

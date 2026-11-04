@@ -9,3 +9,5 @@
 # Plan reports for the Galley review app.
 /.galley/
 __pycache__/
+# Schemas that tauri-build generates.
+/chat/gen/

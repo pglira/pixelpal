@@ -11,12 +11,13 @@
 //! follows the enemy on the ground. The stones are drawn in the enemy window
 //! and in the pal window.
 
-use egui::{Color32, Painter, Pos2, Rect, Vec2, pos2, vec2};
+use crate::canvas::Canvas;
+use crate::geom::{Color32, Pos2, Rect, Vec2, pos2, vec2};
 
 use crate::actions;
 use crate::link::{Clip, Dir, GAME_FRAME, Sprites};
 use crate::pal::{Area, CANVAS, Pal};
-use crate::settings::Config;
+use pixelpal_core::config::Config;
 
 /// Size of the enemy window, in sprite pixels.
 pub const WINDOW: Vec2 = vec2(64.0, CANVAS.y);
@@ -173,7 +174,7 @@ enum State {
 
 struct Enemy {
     kind: &'static Kind,
-    /// Screen x of the center of the body, in points.
+    /// Screen x of the center of the body, in pixels.
     x: f32,
     /// Height above the ground, in sprite pixels.
     z: f32,
@@ -195,9 +196,9 @@ enum Weapon {
 }
 
 struct Stone {
-    /// Screen x of the center, in points.
+    /// Screen x of the center, in pixels.
     x: f32,
-    /// Speed in points per second.
+    /// Speed in pixels per second.
     vx: f32,
     /// Start of the crumble, if the stone hit something.
     crumble: Option<f64>,
@@ -562,7 +563,7 @@ impl Fight {
     #[allow(clippy::too_many_arguments)]
     pub fn paint(
         &self,
-        painter: &Painter,
+        painter: &Canvas,
         rect: Rect,
         window: Pos2,
         sprites: &Sprites,
@@ -584,7 +585,7 @@ impl Fight {
         let draw = |clip: &Clip, frame: usize, at: Pos2, tint: Color32| {
             let (i, n) = (frame.min(clip.frames - 1) as f32, clip.frames as f32);
             painter.image(
-                clip.texture.id(),
+                &clip.texture,
                 Rect::from_min_size((at - clip.origin * scale).round(), clip.size * scale),
                 Rect::from_min_max(pos2(i / n, 0.0), pos2((i + 1.0) / n, 1.0)),
                 tint * base,
@@ -768,7 +769,7 @@ mod tests {
 
     #[test]
     fn every_enemy_has_its_strips() {
-        let sprites = Sprites::load(&egui::Context::default(), 0);
+        let sprites = Sprites::load(0);
         for kind in DAY_KINDS.iter().chain(std::iter::once(&KEESE)) {
             let anims: &[&str] = if kind.flies {
                 &["fly", "hit"]
@@ -851,7 +852,7 @@ mod tests {
 
     #[test]
     fn link_defeats_every_enemy() {
-        let sprites = Sprites::load(&egui::Context::default(), 0);
+        let sprites = Sprites::load(0);
         let cfg = quiet_config();
         let scale = cfg.scale as f32;
         for kind in DAY_KINDS.iter().chain(std::iter::once(&KEESE)) {
@@ -871,7 +872,7 @@ mod tests {
 
     #[test]
     fn the_shield_stops_a_stone_from_the_front() {
-        let sprites = Sprites::load(&egui::Context::default(), 0);
+        let sprites = Sprites::load(0);
         let cfg = quiet_config();
         let scale = cfg.scale as f32;
         for (facing, blocked) in [(Dir::Right, true), (Dir::Left, false)] {

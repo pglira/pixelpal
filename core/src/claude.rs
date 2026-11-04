@@ -71,7 +71,9 @@ pub struct Run {
 }
 
 impl Run {
-    pub fn start(req: Request, ctx: egui::Context) -> Result<Self, String> {
+    /// Starts `claude` for the request `req`. The reader thread calls `notify`
+    /// after each event that it puts into the queue of `try_recv`.
+    pub fn start(req: Request, notify: impl Fn() + Send + 'static) -> Result<Self, String> {
         let message = user_message(&req.prompt, &req.images)?;
         let mut cmd = Command::new(&req.program);
         cmd.args([
@@ -119,16 +121,9 @@ impl Run {
         let stopped = Arc::new(Mutex::new(false));
         let (child2, stopped2) = (child.clone(), stopped.clone());
         thread::spawn(move || {
-            // Streamed text arrives in many small parts; a short delay lets
-            // several of them share one repaint.
             let send = |e: Event| {
-                let text = matches!(e, Event::Text(_));
                 let _ = tx.send(e);
-                if text {
-                    ctx.request_repaint_after(std::time::Duration::from_millis(50));
-                } else {
-                    ctx.request_repaint();
-                }
+                notify();
             };
             let mut parser = Parser::default();
             // Read raw lines, so that invalid UTF-8 cannot stop the reading.

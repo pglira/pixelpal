@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::picker;
+use pixelpal_core::picker;
 
 /// SHA-1 of the ROM without a copier header. The sprite recipe needs this ROM.
 pub const SHA1: &str = "6d4f10a8b10e10dbe624cb23cf03b88bb8252973";

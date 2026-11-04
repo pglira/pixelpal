@@ -462,7 +462,7 @@ mod tests {
     #[test]
     fn every_action_has_its_sprites() {
         for tier in 0..crate::link::tier_count() {
-            let sprites = Sprites::load(&egui::Context::default(), tier);
+            let sprites = Sprites::load(tier);
             for action in ACTIONS.iter().chain(FIGHT_ACTIONS) {
                 for &dir in action.dirs {
                     let shots = scene(action, dir, &sprites);

@@ -7,13 +7,16 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use egui::{ColorImage, Context, TextureHandle, TextureOptions, Vec2, vec2};
+use std::rc::Rc;
+
+use crate::canvas::Texture;
+use crate::geom::{Vec2, vec2};
 use image::RgbaImage;
 use serde::Deserialize;
 
 /// The sprite recipe. It holds no graphics: it names the places of the pixels
 /// and colors in the ROM.
-const RECIPE: &str = include_str!("../assets/link.json");
+const RECIPE: &str = include_str!("../../assets/link.json");
 
 /// Duration of one game frame, in seconds.
 pub const GAME_FRAME: f32 = 1.0 / 60.0;
@@ -327,7 +330,7 @@ pub struct Sequence {
 /// One animation in one direction, or one extra strip.
 pub struct Clip {
     /// The whole strip: the frames side by side.
-    pub texture: TextureHandle,
+    pub texture: Rc<Texture>,
     /// Number of frames.
     pub frames: usize,
     /// Size of each frame, in sprite pixels.
@@ -353,14 +356,12 @@ pub struct Sprites {
 }
 
 /// Draws the strips of one tier and makes their textures, once per strip.
-struct Loader<'a> {
-    ctx: &'a Context,
-    tier: usize,
+struct Loader {
     poses: Vec<Vec<u8>>,
-    textures: HashMap<String, (TextureHandle, Vec<f32>)>,
+    textures: HashMap<String, (Rc<Texture>, Vec<f32>)>,
 }
 
-impl Loader<'_> {
+impl Loader {
     fn clip(&mut self, s: &StripJson, sequences: HashMap<String, Sequence>) -> Option<Clip> {
         if s.poses.is_empty() || s.frame_width == 0 || s.frame_height == 0 {
             return None;
@@ -380,12 +381,7 @@ impl Loader<'_> {
                     bottom(&frame).unwrap_or(s.frame_height) as f32
                 })
                 .collect();
-            let color = ColorImage::from_rgba_unmultiplied(
-                [img.width() as usize, img.height() as usize],
-                img.as_raw(),
-            );
-            let name = format!("tier{}/{}", self.tier, s.strip);
-            let texture = self.ctx.load_texture(name, color, TextureOptions::NEAREST);
+            let texture = Rc::new(Texture::from_rgba(img.width(), img.height(), img.as_raw()));
             self.textures.insert(s.strip.clone(), (texture, bottoms));
         }
         let (texture, bottoms) = &self.textures[&s.strip];
@@ -420,13 +416,11 @@ fn sequences_for(
 impl Sprites {
     /// Loads the sprites of gear tier `tier`, or of the last tier if `tier`
     /// is too large.
-    pub fn load(ctx: &Context, tier: usize) -> Self {
+    pub fn load(tier: usize) -> Self {
         let tier = tier.min(tier_count() - 1);
         let mut recipe = recipe();
         let index = recipe.tiers.swap_remove(tier);
         let mut loader = Loader {
-            ctx,
-            tier,
             poses: recipe.poses.iter().map(|p| decode_hex(p)).collect(),
             textures: HashMap::new(),
         };
@@ -561,7 +555,7 @@ mod tests {
 
     #[test]
     fn every_direction_has_a_shadow() {
-        let sprites = Sprites::load(&Context::default(), 0);
+        let sprites = Sprites::load(0);
         for dir in [Dir::Up, Dir::Down, Dir::Left, Dir::Right] {
             let s = sprites.shadow(dir).expect("shadow");
             assert!(s.size.x > 0.0 && s.size.y > 0.0);
@@ -571,7 +565,7 @@ mod tests {
     #[test]
     fn every_tier_has_the_extras() {
         for tier in 0..tier_count() {
-            let sprites = Sprites::load(&Context::default(), tier);
+            let sprites = Sprites::load(tier);
             assert_eq!(sprites.tier, tier);
             for name in [
                 "skull",

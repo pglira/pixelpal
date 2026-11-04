@@ -1,10 +1,8 @@
 //! File and folder dialogs through `zenity` or `kdialog`, so that pixelpal
-//! needs no GUI toolkit of its own. The dialogs of the settings run on a
-//! thread, so that the window stays responsive.
+//! needs no GUI toolkit for them. Each dialog blocks until the user closes it.
 
 use std::path::Path;
 use std::process::Command;
-use std::sync::mpsc::{Receiver, channel};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Pick {
@@ -14,18 +12,6 @@ pub enum Pick {
 
 /// The result of a dialog: the chosen path, `None` for a cancel, or an error.
 pub type PickResult = Result<Option<String>, String>;
-
-/// Opens a dialog in `start`. The result arrives on the returned channel;
-/// `ctx` repaints when it arrives.
-pub fn open(pick: Pick, start: &Path, ctx: egui::Context) -> Receiver<PickResult> {
-    let (tx, rx) = channel();
-    let start = start.to_path_buf();
-    std::thread::spawn(move || {
-        let _ = tx.send(run(pick, &start));
-        ctx.request_repaint();
-    });
-    rx
-}
 
 /// Opens a dialog for a ROM file and waits for it.
 pub fn pick_rom(title: &str, start: &Path) -> PickResult {
@@ -62,7 +48,8 @@ pub fn show_error(text: &str) {
     }
 }
 
-fn run(pick: Pick, start: &Path) -> PickResult {
+/// Opens a folder or font dialog in `start` and waits for it.
+pub fn pick(pick: Pick, start: &Path) -> PickResult {
     // zenity selects a start folder by a path with a trailing slash.
     let mut dir = start.display().to_string();
     if !dir.ends_with('/') {

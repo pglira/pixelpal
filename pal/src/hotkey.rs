@@ -13,6 +13,8 @@ use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{ConnectionExt as _, GrabMode, Keycode, ModMask};
 use x11rb::rust_connection::RustConnection;
 
+use crate::wake::Waker;
+
 /// Time between two checks for new events.
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
@@ -107,9 +109,9 @@ pub struct Hotkey {
 
 impl Hotkey {
     /// Grabs the shortcut `spec`. Each press of it sends one event and
-    /// repaints `ctx`. Fails if the text is not a shortcut or another program
+    /// wakes `waker`. Fails if the text is not a shortcut or another program
     /// has the shortcut.
-    pub fn grab(spec: &str, ctx: egui::Context) -> Result<Self, String> {
+    pub fn grab(spec: &str, waker: Waker) -> Result<Self, String> {
         let shortcut = parse(spec)?;
         let (conn, screen) = x11rb::connect(None).map_err(|e| e.to_string())?;
         let root = conn.setup().roots[screen].root;
@@ -147,7 +149,7 @@ impl Hotkey {
                     match conn.poll_for_event() {
                         Ok(Some(Event::KeyPress(e))) => {
                             if release_time != Some(e.time) && tx.send(()).is_ok() {
-                                ctx.request_repaint();
+                                waker.wake();
                             }
                         }
                         Ok(Some(Event::KeyRelease(e))) => release_time = Some(e.time),
@@ -181,13 +183,13 @@ impl Binding {
     /// Grabs `spec` when it differs from the last grab, and writes the error
     /// of the grab to `error`. Returns true if the shortcut was pressed since
     /// the last call. An empty `spec` means no shortcut.
-    pub fn poll(&mut self, spec: &str, ctx: &egui::Context, error: &mut Option<String>) -> bool {
+    pub fn poll(&mut self, spec: &str, waker: &Waker, error: &mut Option<String>) -> bool {
         let spec = spec.trim();
         if self.spec.as_deref() != Some(spec) {
             self.hotkey = None;
             *error = None;
             if !spec.is_empty() {
-                match Hotkey::grab(spec, ctx.clone()) {
+                match Hotkey::grab(spec, waker.clone()) {
                     Ok(h) => self.hotkey = Some(h),
                     Err(e) => *error = Some(e),
                 }

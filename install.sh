@@ -1,6 +1,7 @@
 #!/bin/sh
 # Builds pixelpal and installs it for the current user:
-#   $PREFIX/bin/pixelpal                                  the binary
+#   $PREFIX/bin/pixelpal                                  the pal program
+#   $PREFIX/bin/pixelpal-chat                             the chat program
 #   $DATA_DIR/icons/hicolor/<size>/apps/pixelpal.png      the icon
 #   $DATA_DIR/applications/pixelpal.desktop               the desktop file
 #
@@ -21,6 +22,7 @@ set -eu
 PREFIX=${PREFIX:-$HOME/.local}
 DATA_DIR=${XDG_DATA_HOME:-$HOME/.local/share}
 BIN=$PREFIX/bin/pixelpal
+CHAT_BIN=$PREFIX/bin/pixelpal-chat
 ICON_SIZE=96x96
 ICON=$DATA_DIR/icons/hicolor/$ICON_SIZE/apps/pixelpal.png
 DESKTOP=$DATA_DIR/applications/pixelpal.desktop
@@ -35,7 +37,7 @@ refresh_caches() {
 }
 
 if [ "${1:-}" = "--uninstall" ]; then
-    rm -fv "$BIN" "$ICON" "$DESKTOP"
+    rm -fv "$BIN" "$CHAT_BIN" "$ICON" "$DESKTOP"
     refresh_caches
     echo "pixelpal is uninstalled. The autostart entry, if any, is in ~/.config/autostart/pixelpal.desktop."
     exit 0
@@ -44,6 +46,7 @@ fi
 cargo build --release
 
 install -Dm755 target/release/pixelpal "$BIN"
+install -Dm755 target/release/pixelpal-chat "$CHAT_BIN"
 if [ $# -gt 0 ]; then
     "$BIN" --import-rom "$1"
 fi
@@ -70,6 +73,7 @@ refresh_caches
 
 echo "Installed:"
 echo "  $BIN"
+echo "  $CHAT_BIN"
 echo "  $ICON"
 echo "  $DESKTOP"
 case ":$PATH:" in

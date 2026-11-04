@@ -6,6 +6,8 @@ use ksni::blocking::{Handle, TrayMethods};
 use ksni::menu::StandardItem;
 use ksni::{Icon, MenuItem, ToolTip};
 
+use crate::wake::Waker;
+
 pub enum TrayCommand {
     TogglePal,
     ToggleChat,
@@ -15,7 +17,7 @@ pub enum TrayCommand {
 
 struct PalTray {
     tx: Sender<TrayCommand>,
-    ctx: egui::Context,
+    waker: Waker,
     icon: Icon,
     pal_visible: bool,
 }
@@ -23,7 +25,7 @@ struct PalTray {
 impl PalTray {
     fn send(&self, cmd: TrayCommand) {
         let _ = self.tx.send(cmd);
-        self.ctx.request_repaint();
+        self.waker.wake();
     }
 }
 
@@ -84,7 +86,7 @@ pub struct Tray {
 
 impl Tray {
     /// Starts the tray icon. `rgba` is the icon image with straight alpha.
-    pub fn spawn(ctx: egui::Context, width: u32, height: u32, rgba: &[u8]) -> Result<Self, String> {
+    pub fn spawn(waker: Waker, width: u32, height: u32, rgba: &[u8]) -> Result<Self, String> {
         // StatusNotifierItem icons are ARGB32 in network byte order.
         let data = rgba
             .chunks_exact(4)
@@ -98,7 +100,7 @@ impl Tray {
         let (tx, rx) = channel();
         let handle = PalTray {
             tx,
-            ctx,
+            waker,
             icon,
             pal_visible: true,
         }

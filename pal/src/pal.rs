@@ -2,12 +2,13 @@
 
 use std::f32::consts::TAU;
 
-use egui::{Color32, Painter, Pos2, Rect, Stroke, Vec2, pos2, vec2};
+use crate::canvas::{Canvas, Stroke};
+use crate::geom::{Color32, Pos2, Rect, Vec2, pos2, vec2};
 
 use crate::actions::{self, ACTIONS, Shot, Then};
-use crate::chat::ToolActivity;
 use crate::link::{Clip, Dir, Sprites};
-use crate::settings::Config;
+use pixelpal_core::config::Config;
+use pixelpal_core::ipc::ToolActivity;
 
 /// Size of the pal window in sprite pixels. Link stands at the bottom center.
 /// The space around him holds the swords, items and thrown objects of the
@@ -20,7 +21,7 @@ const BODY_WIDTH: f32 = 16.0;
 const PIXELS_PER_METER: f32 = 16.0;
 /// Duration of the happy animation, in seconds.
 const HAPPY_SECONDS: f64 = 1.6;
-/// Smallest walk distance, in points.
+/// Smallest walk distance, in pixels.
 const MIN_WALK: f32 = 24.0;
 
 /// A way to walk: a factor of the configured walk speed, and the weight of
@@ -78,7 +79,7 @@ fn random_gait() -> &'static Gait {
     &GAITS[1]
 }
 
-/// The usable area of the current monitor, in points.
+/// The usable area of the current monitor, in pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Area {
     pub left: f32,
@@ -135,12 +136,12 @@ pub enum Mood {
 }
 
 pub struct Pal {
-    /// Top-left corner of the pal window on the screen, in points.
+    /// Top-left corner of the pal window on the screen, in pixels.
     pub pos: Pos2,
     motion: Motion,
     pub mood: Mood,
     facing: Dir,
-    /// Distance of the current walk, in points.
+    /// Distance of the current walk, in pixels.
     walk_distance: f32,
     /// The current hop, if any.
     hop: Option<Hop>,
@@ -150,7 +151,7 @@ pub struct Pal {
     next_chase: f64,
     /// Until this time, Link flickers and enemies cannot hurt him.
     hurt_until: f64,
-    /// Speed of the knockback after a hit, in points per second, and its end.
+    /// Speed of the knockback after a hit, in pixels per second, and its end.
     knock: (f32, f64),
     /// True while an enemy is near: Link starts no random walk or action.
     pub fighting: bool,
@@ -159,7 +160,7 @@ pub struct Pal {
 /// What the pal perceives in one frame.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Senses {
-    /// The mouse pointer, in screen points.
+    /// The mouse pointer, in screen pixels.
     pub pointer: Option<Pos2>,
     /// Time since the last input of the user.
     pub idle: Option<std::time::Duration>,
@@ -400,14 +401,12 @@ impl Pal {
         CANVAS * scale as f32
     }
 
-    /// Seconds until the pal looks different, so that the app repaints only
-    /// then. `ppp` is the number of physical pixels per point. `idle` is the
-    /// time since the last input of the user.
+    /// Seconds until the pal looks different, so that the event loop draws
+    /// only then. `idle` is the time since the last input of the user.
     pub fn next_change(
         &self,
         now: f64,
         cfg: &Config,
-        ppp: f32,
         may_move: bool,
         idle: Option<std::time::Duration>,
     ) -> f64 {
@@ -416,8 +415,8 @@ impl Pal {
             Motion::Fall { .. } | Motion::Held | Motion::Bonk { .. } => FRAME,
             Motion::Walk { .. } if self.hop.is_some() => FRAME,
             Motion::Walk { speed, .. } => {
-                // The window moves by one physical pixel.
-                let px_per_second = cfg.walk_speed * speed * ppp.max(0.1);
+                // The window moves by one pixel.
+                let px_per_second = cfg.walk_speed * speed;
                 (1.0 / px_per_second.max(1.0)) as f64
             }
             Motion::Act { shots, start, .. } => {
@@ -931,7 +930,7 @@ impl Pal {
     }
 
     /// Draws the pal into `rect`, the full pal window.
-    pub fn paint(&self, painter: &Painter, rect: Rect, sprites: &Sprites, cfg: &Config, now: f64) {
+    pub fn paint(&self, painter: &Canvas, rect: Rect, sprites: &Sprites, cfg: &Config, now: f64) {
         let scale = cfg.scale as f32;
         let mut hop = self.hop_height(now, cfg) * scale;
         if let Motion::Bonk { start, .. } = self.motion {
@@ -967,7 +966,7 @@ impl Pal {
         let draw = |clip: &Clip, frame: usize, at: Pos2| {
             let (i, n) = (frame.min(clip.frames - 1) as f32, clip.frames as f32);
             painter.image(
-                clip.texture.id(),
+                &clip.texture,
                 Rect::from_min_size((at - clip.origin * scale).round(), clip.size * scale),
                 Rect::from_min_max(pos2(i / n, 0.0), pos2((i + 1.0) / n, 1.0)),
                 tint,
@@ -1037,18 +1036,17 @@ fn pause(cfg: &Config) -> f64 {
 }
 
 /// A speech bubble with animated dots above the head of the sprite.
-fn paint_bubble(painter: &Painter, sprite: Rect, s: f32, now: f64) {
+fn paint_bubble(painter: &Canvas, sprite: Rect, s: f32, now: f64) {
     let outline = Color32::from_rgb(40, 40, 40);
     let bubble = Rect::from_center_size(
         pos2(sprite.center().x + 3.0 * s, sprite.top() - 7.0 * s),
         vec2(14.0 * s, 8.0 * s),
     );
-    painter.rect(
+    painter.rounded_rect(
         bubble,
         3.0 * s,
         Color32::WHITE,
         Stroke::new(s * 0.7, outline),
-        egui::StrokeKind::Inside,
     );
     painter.circle(
         pos2(bubble.center().x - 3.0 * s, bubble.bottom() + 1.5 * s),
@@ -1075,7 +1073,7 @@ fn paint_bubble(painter: &Painter, sprite: Rect, s: f32, now: f64) {
 }
 
 /// Small twinkling stars around the head of the sprite.
-fn paint_stars(painter: &Painter, sprite: Rect, s: f32, now: f64) {
+fn paint_stars(painter: &Canvas, sprite: Rect, s: f32, now: f64) {
     let spots = [(-9.0, 2.0), (9.0, 0.0), (0.0, -6.0)];
     for (i, (dx, dy)) in spots.iter().enumerate() {
         let phase = (now as f32 * 6.0 + i as f32 * 2.1).sin() * 0.5 + 0.5;
@@ -1095,7 +1093,7 @@ mod tests {
 
     #[test]
     fn no_pose_floats_above_the_ground() {
-        let sprites = Sprites::load(&egui::Context::default(), 0);
+        let sprites = Sprites::load(0);
         for (anim, dirs) in sprites.clip_names() {
             // Link shrinks into the hole of a pit; lying poses move down.
             if anim == "fall_in_pit" || LYING.contains(&anim.as_str()) {
@@ -1137,7 +1135,7 @@ mod tests {
 
     #[test]
     fn edge_dash_ends_with_a_bonk_inside_the_area() {
-        let sprites = Sprites::load(&egui::Context::default(), 0);
+        let sprites = Sprites::load(0);
         let cfg = Config {
             edge_dash: true,
             edge_dash_chance: 1.0,
@@ -1182,7 +1180,7 @@ mod tests {
 
     #[test]
     fn sleeping_pal_stays_on_the_ground_of_a_new_area() {
-        let sprites = Sprites::load(&egui::Context::default(), 0);
+        let sprites = Sprites::load(0);
         let cfg = Config {
             idle_sleep: true,
             day_night: false,

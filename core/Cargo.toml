@@ -1,0 +1,18 @@
+[package]
+name = "pixelpal-core"
+description = "The parts of pixelpal that both processes share: the configuration, the chats, the Claude runner and the messages between the processes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+base64.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+fastrand.workspace = true
+image.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha1_smol = "1.0.1"
+toml = "1.1.8"
