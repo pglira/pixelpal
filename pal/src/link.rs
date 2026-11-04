@@ -173,9 +173,25 @@ impl Graphics {
         })
     }
 
+    /// All tiles that show the same pixels as one of `tiles`, also as a
+    /// mirror image.
+    fn look_alikes(&self, tiles: &[usize]) -> Vec<usize> {
+        let mirror =
+            |t: &[u8; 64]| -> [u8; 64] { std::array::from_fn(|i| t[i / 8 * 8 + 7 - i % 8]) };
+        let shapes: Vec<[u8; 64]> = tiles
+            .iter()
+            .filter_map(|&i| self.tiles.get(i))
+            .flat_map(|t| [*t, mirror(t)])
+            .collect();
+        (0..self.tiles.len())
+            .filter(|&i| shapes.contains(&self.tiles[i]))
+            .collect()
+    }
+
     /// Draws a strip: frame `i` is the rectangle at `crop` of pose `poses[i]`.
-    /// A later tile of a pose covers an earlier one.
-    fn strip(&self, poses: &[Vec<u8>], s: &StripJson) -> RgbaImage {
+    /// A later tile of a pose covers an earlier one. Tiles in `skip` are left
+    /// out.
+    fn strip(&self, poses: &[Vec<u8>], s: &StripJson, skip: &[usize]) -> RgbaImage {
         let (w, h) = (s.frame_width, s.frame_height);
         let mut img = RgbaImage::new(w * s.poses.len() as u32, h);
         for (i, &pose) in s.poses.iter().enumerate() {
@@ -183,6 +199,9 @@ impl Graphics {
             for p in placements.chunks_exact(5) {
                 let (x, y, flags) = (p[0] as i32, p[1] as i32, p[2]);
                 let tile = u16::from_le_bytes([p[3], p[4]]) as usize;
+                if skip.contains(&tile) {
+                    continue;
+                }
                 let (Some(tile), Some(pal)) = (
                     self.tiles.get(tile),
                     self.palettes.get((flags >> 2) as usize),
@@ -358,16 +377,32 @@ pub struct Sprites {
 /// Draws the strips of one tier and makes their textures, once per strip.
 struct Loader {
     poses: Vec<Vec<u8>>,
+    /// The tiles of the shadow strips and the tiles with the same pixels.
+    /// The extras leave them out: on the
+    /// ground, the enemies have no shadow, as Link has none, and their feet
+    /// touch the ground.
+    shadow_tiles: Vec<usize>,
     textures: HashMap<String, (Rc<Texture>, Vec<f32>)>,
 }
 
 impl Loader {
-    fn clip(&mut self, s: &StripJson, sequences: HashMap<String, Sequence>) -> Option<Clip> {
+    /// The clip of strip `s`. `no_shadow` leaves out the shadow tiles.
+    fn clip(
+        &mut self,
+        s: &StripJson,
+        sequences: HashMap<String, Sequence>,
+        no_shadow: bool,
+    ) -> Option<Clip> {
         if s.poses.is_empty() || s.frame_width == 0 || s.frame_height == 0 {
             return None;
         }
         if !self.textures.contains_key(&s.strip) {
-            let img = graphics().strip(&self.poses, s);
+            let skip = if no_shadow {
+                &self.shadow_tiles[..]
+            } else {
+                &[]
+            };
+            let img = graphics().strip(&self.poses, s, skip);
             let bottoms = (0..s.poses.len() as u32)
                 .map(|i| {
                     let frame = image::imageops::crop_imm(
@@ -420,15 +455,27 @@ impl Sprites {
         let tier = tier.min(tier_count() - 1);
         let mut recipe = recipe();
         let index = recipe.tiers.swap_remove(tier);
+        let poses: Vec<Vec<u8>> = recipe.poses.iter().map(|p| decode_hex(p)).collect();
+        let shadow_tiles: Vec<usize> = index
+            .shadows
+            .values()
+            .flat_map(|s| &s.poses)
+            .filter_map(|&pose| poses.get(pose))
+            .flat_map(|p| p.chunks_exact(5))
+            .map(|p| u16::from_le_bytes([p[3], p[4]]) as usize)
+            .collect();
+        let shadow_tiles = graphics().look_alikes(&shadow_tiles);
         let mut loader = Loader {
-            poses: recipe.poses.iter().map(|p| decode_hex(p)).collect(),
+            poses,
+            shadow_tiles,
             textures: HashMap::new(),
         };
         let mut clips = HashMap::new();
         for (name, dirs) in &index.animations {
             for (dir, s) in dirs {
                 if let Some(dir) = Dir::parse(dir)
-                    && let Some(clip) = loader.clip(s, sequences_for(&recipe.sequences, name, dir))
+                    && let Some(clip) =
+                        loader.clip(s, sequences_for(&recipe.sequences, name, dir), false)
                 {
                     clips.insert((name.clone(), dir), clip);
                 }
@@ -437,12 +484,12 @@ impl Sprites {
         let shadows = index
             .shadows
             .iter()
-            .filter_map(|(dir, s)| Some((Dir::parse(dir)?, loader.clip(s, HashMap::new())?)))
+            .filter_map(|(dir, s)| Some((Dir::parse(dir)?, loader.clip(s, HashMap::new(), false)?)))
             .collect();
         let extras = index
             .extras
             .iter()
-            .filter_map(|(name, s)| Some((name.clone(), loader.clip(s, HashMap::new())?)))
+            .filter_map(|(name, s)| Some((name.clone(), loader.clip(s, HashMap::new(), true)?)))
             .collect();
         let feet = stand_image(tier)
             .and_then(|(img, origin_y)| Some(bottom(&img)? as f32 - origin_y))
@@ -502,7 +549,7 @@ fn stand_image(tier: usize) -> Option<(RgbaImage, f32)> {
         poses: vec![0],
         ..*s
     };
-    Some((graphics().strip(&poses, &first), s.origin[1]))
+    Some((graphics().strip(&poses, &first, &[]), s.origin[1]))
 }
 
 /// The row below the lowest opaque pixel.
@@ -599,7 +646,7 @@ mod tests {
             strips.dedup_by(|a, b| a.strip == b.strip);
             let mut h: u64 = 0xcbf2_9ce4_8422_2325;
             for s in strips {
-                for &b in graphics().strip(&poses, s).as_raw() {
+                for &b in graphics().strip(&poses, s, &[]).as_raw() {
                     h = (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3);
                 }
             }

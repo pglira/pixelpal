@@ -594,8 +594,10 @@ impl Fight {
         // The origin of a sprite whose reference strip stands on the ground,
         // with its body centered at the screen x `x`, `z` sprite pixels high.
         let origin = |reference: &Clip, x: f32, z: f32| {
-            let feet = reference.bottoms.first().copied().unwrap_or(16.0) - reference.origin.y;
-            pos2(to_local(x) - 8.0 * scale, ground - (feet + z) * scale)
+            pos2(
+                to_local(x) - 8.0 * scale,
+                ground - (feet(reference) + z) * scale,
+            )
         };
 
         if let (Some(fly), Some(crumble)) = (
@@ -740,6 +742,13 @@ impl Fight {
     }
 }
 
+/// The distance from the origin of `clip` down to its lowest frame bottom,
+/// in sprite pixels. The lowest frame of a strip touches the ground, and the
+/// other frames step up from it.
+fn feet(clip: &Clip) -> f32 {
+    clip.bottoms.iter().copied().fold(0.0, f32::max) - clip.origin.y
+}
+
 /// A random drop of a defeated enemy, or none.
 fn random_prize() -> Option<Prize> {
     match fastrand::u32(..10) {
@@ -796,6 +805,50 @@ mod tests {
             "blue_rupee_idle",
         ] {
             assert!(sprites.extra(name).is_some(), "missing {name}");
+        }
+    }
+
+    /// The feet of an enemy on the ground are on the ground: each drawn frame
+    /// touches the ground or steps at most two pixels up from it, and no frame
+    /// reaches below the ground.
+    #[test]
+    fn ground_enemies_stand_on_the_ground() {
+        for tier in 0..crate::link::tier_count() {
+            let sprites = Sprites::load(tier);
+            for kind in DAY_KINDS {
+                // The reference strip and the other strips that
+                // `Fight::paint` draws for the kind.
+                let strips: &[(&str, &[&str])] = if kind.sided {
+                    &[
+                        ("walk_left", &["walk_left", "shoot_left"]),
+                        ("walk_right", &["walk_right", "shoot_right"]),
+                    ]
+                } else {
+                    &[("walk_down", &["walk_down", "hit", "shock"])]
+                };
+                for (reference, anims) in strips {
+                    let reference = sprites
+                        .extra(&format!("{}_{reference}", kind.name))
+                        .expect("walk strip");
+                    // The 16 x 16 body box, and at most two pixels of legs below
+                    // it. A shadow below the feet reaches further.
+                    let ground = feet(reference);
+                    assert!(ground <= 18.0, "{}: feet at {ground}", kind.name);
+                    for anim in *anims {
+                        let Some(clip) = sprites.extra(&format!("{}_{anim}", kind.name)) else {
+                            continue;
+                        };
+                        for (i, bottom) in clip.bottoms.iter().enumerate() {
+                            let gap = ground - (bottom - clip.origin.y);
+                            assert!(
+                                (0.0..=2.0).contains(&gap),
+                                "{} {anim} frame {i}: {gap} px above the ground",
+                                kind.name
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 
