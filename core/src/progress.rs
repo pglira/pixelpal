@@ -1,5 +1,7 @@
-//! Progress of Link: the number of completed chat turns, and the gear tier
-//! that it unlocks.
+//! Progress of Link: the number of completed chat turns since the start of
+//! the pal, and the gear tier that it unlocks. The pal starts each run at
+//! zero and writes the count to a file, from which the settings window
+//! reads it.
 
 use std::path::PathBuf;
 
@@ -18,19 +20,19 @@ pub const TIERS: [TierInfo; 5] = [
         name: "Fighter's Sword",
     },
     TierInfo {
-        needs: 10,
+        needs: 5,
         name: "Master Sword",
     },
     TierInfo {
-        needs: 30,
+        needs: 10,
         name: "Blue Mail",
     },
     TierInfo {
-        needs: 75,
+        needs: 15,
         name: "Tempered Sword",
     },
     TierInfo {
-        needs: 150,
+        needs: 20,
         name: "Golden Sword",
     },
 ];
@@ -90,9 +92,10 @@ mod tests {
     fn tiers_follow_the_completed_turns() {
         let tier = |completed| Progress { completed }.tier();
         assert_eq!(tier(0), 0);
-        assert_eq!(tier(9), 0);
-        assert_eq!(tier(10), 1);
-        assert_eq!(tier(149), 3);
+        assert_eq!(tier(4), 0);
+        assert_eq!(tier(5), 1);
+        assert_eq!(tier(19), 3);
+        assert_eq!(tier(20), 4);
         assert_eq!(tier(1000), 4);
     }
 }

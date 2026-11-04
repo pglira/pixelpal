@@ -163,7 +163,7 @@ function movement() {
   row(g, "Walk distance per frame", "Larger values give slower steps for the same walk speed.", number("walk_stride", { min: 0.5, max: 10, step: 0.05, unit: "px" }));
   row(g, "Gravity", "Acceleration of a fall after a drag. 9.81 m/s² is the gravity of the earth.", number("gravity", { min: 0.5, max: 100, step: 0.1, unit: "m/s²" }));
   row(g, "Bottom margin", "", number("bottom_margin", { min: 0, max: 500, unit: "px" }));
-  row(g, "Gear grows with chats", "Completed chats unlock the Master Sword, the Blue Mail, the Tempered Sword and the Golden Sword.", check("gear_progress"), node("span", { className: "unit", textContent: view.progress }));
+  row(g, "Gear grows with chats", "Completed chats since the start of pixelpal unlock the Master Sword, the Blue Mail, the Tempered Sword, and the Golden Sword with the Red Mail.", check("gear_progress"), node("span", { className: "unit", textContent: view.progress }));
   return [node("h2", { textContent: "Movement" }), g];
 }
 

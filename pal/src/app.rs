@@ -233,7 +233,8 @@ impl App {
         let tray = Tray::spawn(waker.clone(), w, h, &rgba)
             .map_err(|e| eprintln!("pixelpal: no tray icon: {e}"))
             .ok();
-        let progress = Progress::load();
+        let progress = Progress::default();
+        progress.save();
         let tier = if cfg.gear_progress {
             progress.tier()
         } else {
