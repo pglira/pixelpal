@@ -11,7 +11,7 @@ mod session;
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -43,11 +43,13 @@ const MENU_SIZE: (f64, f64) = (170.0, 156.0);
 /// Shortest time between two updates of a streamed reply in the page.
 const STREAM_INTERVAL: Duration = Duration::from_millis(50);
 
-/// A running resize drag of the chat panel: the size at its start.
+/// A running resize drag of the chat panel: the size and the pointer
+/// position at its start.
 #[derive(Clone, Copy)]
 struct Resize {
     width: f32,
     height: f32,
+    pointer: (i32, i32),
 }
 
 /// The state of the chat process.
@@ -281,13 +283,10 @@ fn stream_changes(app: AppHandle, state: AppState) {
     }
 }
 
-/// The place of the chat panel: centered above the pal, inside the area.
-fn panel_rect(s: &Shared) -> Bounds {
-    let (w, h) = (
-        s.cfg.panel_width.round() as i32,
-        s.cfg.panel_height.round() as i32,
-    );
-    let (pal, area) = s.anchor.unwrap_or((
+/// The pal window and the area of its monitor. Without an anchor from the
+/// pal, an area of 1280×720 pixels.
+fn anchor(s: &Shared) -> (Bounds, Bounds) {
+    s.anchor.unwrap_or((
         Bounds {
             x: 640,
             y: 700,
@@ -300,10 +299,49 @@ fn panel_rect(s: &Shared) -> Bounds {
             w: 1280,
             h: 720,
         },
-    ));
+    ))
+}
+
+/// The bottom edge of the chat panel: the gap of the configuration above the
+/// bottom of the area, and at least the smallest panel height below its top.
+fn panel_bottom(cfg: &Config, area: Bounds) -> i32 {
+    (area.y + area.h - cfg.panel_gap.round() as i32).max(area.y + PANEL_MIN.1 as i32)
+}
+
+fn panel_rect(s: &Shared) -> Bounds {
+    let (pal, area) = anchor(s);
+    panel_place(&s.cfg, pal, area)
+}
+
+/// The place of the chat panel: horizontally centered on the pal, with its
+/// bottom edge at `panel_bottom`, and inside the area.
+fn panel_place(cfg: &Config, pal: Bounds, area: Bounds) -> Bounds {
+    let bottom = panel_bottom(cfg, area);
+    let w = (cfg.panel_width.round() as i32).min(area.w.max(PANEL_MIN.0 as i32));
+    let h = (cfg.panel_height.round() as i32).min(bottom - area.y);
     let x = (pal.x + pal.w / 2 - w / 2).clamp(area.x, (area.x + area.w - w).max(area.x));
-    let y = (pal.y - h - 4).max(area.y);
-    Bounds { x, y, w, h }
+    Bounds {
+        x,
+        y: bottom - h,
+        w,
+        h,
+    }
+}
+
+/// The position of the mouse pointer on the screen, from the X server.
+fn pointer_position() -> Option<(i32, i32)> {
+    use x11rb::connection::Connection as _;
+    use x11rb::protocol::xproto::ConnectionExt as _;
+    static CONN: OnceLock<Option<(x11rb::rust_connection::RustConnection, u32)>> = OnceLock::new();
+    let (conn, root) = CONN
+        .get_or_init(|| {
+            let (conn, n) = x11rb::connect(None).ok()?;
+            let root = conn.setup().roots[n].root;
+            Some((conn, root))
+        })
+        .as_ref()?;
+    let r = conn.query_pointer(*root).ok()?.reply().ok()?;
+    Some((r.root_x.into(), r.root_y.into()))
 }
 
 fn place_panel(win: &WebviewWindow, s: &Shared) {
@@ -737,30 +775,44 @@ fn open_url(url: String) {
     }
 }
 
+/// Starts a resize drag. `x` and `y` are the place of the press in the page.
 #[tauri::command]
-fn resize_begin(state: State<'_, AppState>) {
+fn resize_begin(x: f64, y: f64, app: AppHandle, state: State<'_, AppState>) {
+    let Some(win) = app.get_webview_window(CHAT) else {
+        return;
+    };
+    let (Ok(pos), Ok(scale)) = (win.inner_position(), win.scale_factor()) else {
+        return;
+    };
+    let pointer = (
+        pos.x + (x * scale).round() as i32,
+        pos.y + (y * scale).round() as i32,
+    );
     let mut s = state.lock();
+    let r = panel_rect(&s);
     s.resize = Some(Resize {
-        width: s.cfg.panel_width,
-        height: s.cfg.panel_height,
+        width: r.w as f32,
+        height: r.h as f32,
+        pointer,
     });
 }
 
-/// Changes the size of the chat panel during a resize drag. `dx` and `dy` are
-/// the movement of the pointer since the start of the drag. The panel stays
-/// centered above the pal, so a side edge changes the width on both sides.
+/// Changes the size of the chat panel during a resize drag, from the movement
+/// of the pointer since the start of the drag. The pointer position comes
+/// from the X server, because the positions of the page events are not
+/// reliable while the window moves under the pointer. The panel stays
+/// centered on the pal, so a side edge changes the width on both sides.
 #[tauri::command]
-fn resize_by(
-    dx: f32,
-    dy: f32,
-    left: bool,
-    right: bool,
-    top: bool,
-    app: AppHandle,
-    state: State<'_, AppState>,
-) {
-    let mut s = state.lock();
+fn resize_by(left: bool, right: bool, top: bool, app: AppHandle, state: State<'_, AppState>) {
+    resize_to(&mut state.lock(), &app, left, right, top);
+}
+
+fn resize_to(s: &mut Shared, app: &AppHandle, left: bool, right: bool, top: bool) {
     let Some(r) = s.resize else { return };
+    let Some((px, py)) = pointer_position() else {
+        return;
+    };
+    let (dx, dy) = ((px - r.pointer.0) as f32, (py - r.pointer.1) as f32);
     let (mut w, mut h) = (r.width, r.height);
     if right {
         w += 2.0 * dx;
@@ -771,24 +823,22 @@ fn resize_by(
     if top {
         h -= dy;
     }
-    let area = s.anchor.map(|(_, a)| a);
-    let max_w = area
-        .map_or(f32::MAX, |a| a.w as f32)
-        .max(PANEL_MIN.0 as f32);
-    let max_h = area
-        .map_or(f32::MAX, |a| a.h as f32)
-        .max(PANEL_MIN.1 as f32);
+    let (_, area) = anchor(s);
+    let max_w = (area.w as f32).max(PANEL_MIN.0 as f32);
+    let max_h = ((panel_bottom(&s.cfg, area) - area.y) as f32).max(PANEL_MIN.1 as f32);
     s.cfg.panel_width = w.clamp(PANEL_MIN.0 as f32, max_w).round();
     s.cfg.panel_height = h.clamp(PANEL_MIN.1 as f32, max_h).round();
     if let Some(win) = app.get_webview_window(CHAT) {
-        place_panel(&win, &s);
+        place_panel(&win, s);
     }
 }
 
-/// Ends a resize drag and stores the new size.
+/// Ends a resize drag with a last change of the size, and stores the new
+/// size.
 #[tauri::command]
-fn resize_end(app: AppHandle, state: State<'_, AppState>) {
+fn resize_end(left: bool, right: bool, top: bool, app: AppHandle, state: State<'_, AppState>) {
     let mut s = state.lock();
+    resize_to(&mut s, &app, left, right, top);
     if s.resize.take().is_some() {
         s.cfg.save();
         to_pal(ToPal::ConfigChanged);
@@ -1052,6 +1102,19 @@ fn main() {
                     api.prevent_close();
                     hide_panel(app, &state);
                 }
+                // Other programs can move the panel. The panel then goes back
+                // to its own place.
+                (CHAT, WindowEvent::Moved(pos)) => {
+                    let s = state.lock();
+                    let r = panel_rect(&s);
+                    if s.panel_open
+                        && s.resize.is_none()
+                        && (pos.x, pos.y) != (r.x, r.y)
+                        && let Some(w) = app.get_webview_window(CHAT)
+                    {
+                        place_panel(&w, &s);
+                    }
+                }
                 // Other programs can maximize or resize the panel, for example
                 // a window rule that matches its title. The panel then takes
                 // its own size and place again.
@@ -1125,4 +1188,43 @@ fn main() {
             api.prevent_exit();
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn b(x: i32, y: i32, w: i32, h: i32) -> Bounds {
+        Bounds { x, y, w, h }
+    }
+
+    #[test]
+    fn panel_is_centered_on_the_pal_above_the_gap() {
+        let cfg = Config {
+            panel_width: 400.0,
+            panel_height: 600.0,
+            panel_gap: 100.0,
+            ..Config::default()
+        };
+        let area = b(0, 0, 2000, 1000);
+        assert_eq!(
+            panel_place(&cfg, b(900, 900, 100, 90), area),
+            b(750, 300, 400, 600)
+        );
+        // At the edge of the area, the panel stays inside it.
+        assert_eq!(
+            panel_place(&cfg, b(1950, 900, 100, 90), area),
+            b(1600, 300, 400, 600)
+        );
+        // A panel that is too high gets the height between the top of the
+        // area and the gap.
+        let tall = Config {
+            panel_height: 5000.0,
+            ..cfg
+        };
+        assert_eq!(
+            panel_place(&tall, b(900, 900, 100, 90), area),
+            b(750, 0, 400, 900)
+        );
+    }
 }

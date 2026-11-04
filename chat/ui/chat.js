@@ -301,43 +301,49 @@ async function handlePaste(ev) {
   }
 }
 
-// Resize drags at the edges. The backend changes the size of the window; the
-// movement comes in screen coordinates, so that the moving window does not
-// change it.
+// Resize drags at the edges. The backend reads the pointer position from the
+// X server and changes the size of the window; the page tells it the place
+// of the press in the window, the moves and the end of the drag, in this
+// order. A move sends at
+// most one update per frame.
+let resizeCalls = Promise.resolve();
+const resizeCall = (cmd, args) => {
+  resizeCalls = resizeCalls.then(() => invoke(cmd, args)).catch(() => {});
+};
 for (const grip of document.querySelectorAll(".grip")) {
   const edges = grip.dataset.edges.split(" ");
-  let start = null;
+  const sides = { left: edges.includes("left"), right: edges.includes("right"), top: edges.includes("top") };
+  let dragging = false;
   let frame = 0;
+  const update = () => {
+    frame = 0;
+    resizeCall("resize_by", sides);
+  };
   grip.addEventListener("pointerdown", (ev) => {
     if (ev.button !== 0) return;
     ev.preventDefault();
     grip.setPointerCapture(ev.pointerId);
-    start = { x: ev.screenX, y: ev.screenY };
-    invoke("resize_begin");
+    dragging = true;
+    resizeCall("resize_begin", { x: ev.clientX, y: ev.clientY });
   });
   grip.addEventListener("pointermove", (ev) => {
-    if (!start) return;
-    const dx = ev.screenX - start.x;
-    const dy = ev.screenY - start.y;
-    cancelAnimationFrame(frame);
-    frame = requestAnimationFrame(() =>
-      invoke("resize_by", {
-        dx,
-        dy,
-        left: edges.includes("left"),
-        right: edges.includes("right"),
-        top: edges.includes("top"),
-      }),
-    );
+    if (!dragging) return;
+    if (!(ev.buttons & 1)) {
+      end();
+      return;
+    }
+    if (!frame) frame = requestAnimationFrame(update);
   });
   const end = () => {
-    if (!start) return;
-    start = null;
+    if (!dragging) return;
+    dragging = false;
     cancelAnimationFrame(frame);
-    invoke("resize_end");
+    frame = 0;
+    resizeCall("resize_end", sides);
   };
   grip.addEventListener("pointerup", end);
   grip.addEventListener("pointercancel", end);
+  grip.addEventListener("lostpointercapture", end);
 }
 
 el.model.onchange = () => invoke("set_model", { model: el.model.value });

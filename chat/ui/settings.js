@@ -272,6 +272,12 @@ function panel() {
   const size = grid();
   row(size, "Width", "", number("panel_width", { min: 280, max: 1600, unit: "px" }));
   row(size, "Height", "", number("panel_height", { min: 240, max: 1400, unit: "px" }));
+  row(
+    size,
+    "Bottom gap",
+    "The space between the bottom of the screen and the bottom of the chat panel.",
+    number("panel_gap", { min: 0, max: 4000, unit: "px" }),
+  );
   const t = grid();
   const preset = (name, theme) => {
     const b = node("button", { textContent: name });
