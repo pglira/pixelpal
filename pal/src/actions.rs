@@ -26,11 +26,14 @@ enum Repeat {
 enum Part {
     /// A sequence of an animation.
     Seq(&'static str, &'static str, Repeat),
+    /// A sequence of an animation during which Link moves forward, at this
+    /// factor of the walk speed.
+    Move(&'static str, &'static str, Repeat, f32),
     /// One frame of an animation for a number of seconds.
     Pose(&'static str, usize, f32),
 }
 
-use Part::{Pose, Seq};
+use Part::{Move, Pose, Seq};
 use Repeat::{For, Once, Times};
 
 /// The standing frame for a number of seconds.
@@ -125,8 +128,8 @@ pub const ACTIONS: &[Action] = &[
     ]),
     action("sword_poke", SIDES, &[Seq("sword_poke_wall", "poke", For(1.2)), stand(0.4)]),
     action("swim", SIDES, &[
-        Seq("swim_move", "swim", For(2.5)),
-        Seq("swim_stroke", "stroke", Times(2)),
+        Move("swim_move", "swim", For(2.5), 0.5),
+        Move("swim_stroke", "stroke", Times(2), 0.8),
         Seq("swim_idle", "tread", For(2.0)), stand(0.4),
     ]),
     action("bow", SIDES, &[
@@ -215,6 +218,7 @@ impl Builder<'_> {
             frame,
             secs: frames as f32 * GAME_FRAME,
             prop,
+            speed: 0.0,
         });
         Some(())
     }
@@ -341,6 +345,8 @@ pub struct Shot {
     pub secs: f32,
     /// An object drawn with Link in this frame.
     pub prop: Option<Prop>,
+    /// Factor of the walk speed at which Link moves forward in this frame.
+    pub speed: f32,
 }
 
 /// A frame of an extra strip (see `Sprites::extra`), placed with its top-left
@@ -350,6 +356,11 @@ pub struct Prop {
     pub extra: &'static str,
     pub frame: usize,
     pub at: (f32, f32),
+}
+
+/// True if Link moves forward in a part of `action`.
+pub fn moves(action: &Action) -> bool {
+    action.parts.iter().any(|p| matches!(p, Move(..)))
 }
 
 /// A random direction of `action`.
@@ -414,9 +425,15 @@ pub fn scene(action: &Action, dir: Dir, sprites: &Sprites) -> Option<Vec<Shot>> 
                     frame,
                     secs,
                     prop: None,
+                    speed: 0.0,
                 });
             }
-            Seq(anim, seq, repeat) => {
+            Seq(anim, seq, repeat) | Move(anim, seq, repeat, _) => {
+                let speed = if let Move(.., speed) = *part {
+                    speed
+                } else {
+                    0.0
+                };
                 let clip = sprites.clip(anim, dir)?;
                 let name = if seq == BY_DIR { dir.name() } else { seq };
                 let s = clip.sequences.get(name)?;
@@ -429,6 +446,7 @@ pub fn scene(action: &Action, dir: Dir, sprites: &Sprites) -> Option<Vec<Shot>> 
                     frame,
                     secs: if d == 0 { HOLD } else { d as f32 * GAME_FRAME },
                     prop: None,
+                    speed,
                 };
                 let one: Vec<Shot> = s.frames.iter().map(shot).collect();
                 match repeat {

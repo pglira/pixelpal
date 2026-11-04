@@ -420,16 +420,24 @@ impl Pal {
                 (1.0 / px_per_second.max(1.0)) as f64
             }
             Motion::Act { shots, start, .. } => {
-                // The next shot starts.
+                // The next shot starts, or a moving shot moves the window by
+                // one pixel.
                 let mut end = 0.0;
+                let mut speed = 0.0;
                 let elapsed = (now - start) as f32;
                 for s in shots {
                     end += s.secs;
                     if end > elapsed {
+                        speed = s.speed;
                         break;
                     }
                 }
-                (end - elapsed).max(0.0) as f64
+                let next = (end - elapsed).max(0.0) as f64;
+                if speed > 0.0 {
+                    next.min((1.0 / (cfg.walk_speed * speed).max(1.0)) as f64)
+                } else {
+                    next
+                }
             }
             Motion::Stand { until } if self.hop.is_some() => FRAME.min(until - now),
             Motion::Stand { until } => until - now,
@@ -596,7 +604,8 @@ impl Pal {
                 } else if may_move && now >= until && !self.fighting {
                     let calm = self.mood == Mood::Calm;
                     if calm && cfg.actions && fastrand::f32() < cfg.action_chance {
-                        self.start_action(now, sprites);
+                        let room = (self.pos.x - edges.0, edges.1 - self.pos.x);
+                        self.start_action(now, sprites, room);
                     } else if cfg.walk {
                         self.start_walk(now, cfg, (min_x, max_x), edges, size.x);
                     } else {
@@ -611,6 +620,20 @@ impl Pal {
                 start,
                 then,
             } => {
+                // A moving shot moves Link forward up to the edge of the area,
+                // while the pal may move.
+                let mut t = (now - start) as f32;
+                if let Some(s) = shots.iter().find(|s| {
+                    let current = t < s.secs;
+                    t -= s.secs;
+                    current
+                }) && s.speed > 0.0
+                    && may_move
+                {
+                    let sign = if s.dir == Dir::Left { -1.0 } else { 1.0 };
+                    let x = self.pos.x + sign * cfg.walk_speed * s.speed * dt;
+                    self.pos.x = x.clamp(edges.0, edges.1);
+                }
                 let total: f32 = shots.iter().map(|s| s.secs).sum();
                 if now - start >= total as f64 {
                     if then == Then::DropFromAbove {
@@ -736,7 +759,9 @@ impl Pal {
     /// Starts a random action, or the action that `$PIXELPAL_ACTION` names. If
     /// the sprites lack a part of the action, the pal stands for one more second.
     /// At night, the action comes from `actions::NIGHT_ACTIONS`.
-    fn start_action(&mut self, now: f64, sprites: &Sprites) {
+    /// Starts a random action. `room` is the free distance to the left and to
+    /// the right edge of the area.
+    fn start_action(&mut self, now: f64, sprites: &Sprites, room: (f32, f32)) {
         let forced = std::env::var("PIXELPAL_ACTION").ok();
         let night = actions::NIGHT_ACTIONS[fastrand::usize(..actions::NIGHT_ACTIONS.len())];
         let action = forced
@@ -744,7 +769,29 @@ impl Pal {
             .and_then(actions::find)
             .or_else(|| self.night.then(|| actions::find(night)).flatten())
             .unwrap_or_else(|| &ACTIONS[fastrand::usize(..ACTIONS.len())]);
-        self.play(action, now, sprites);
+        self.play_in_room(action, now, sprites, room);
+    }
+
+    /// Plays `action`. An action that moves Link goes to the side with more
+    /// room; `room` is the free distance to the left and to the right edge of
+    /// the area.
+    fn play_in_room(
+        &mut self,
+        action: &actions::Action,
+        now: f64,
+        sprites: &Sprites,
+        room: (f32, f32),
+    ) {
+        if actions::moves(action) {
+            let dir = if room.1 >= room.0 {
+                Dir::Right
+            } else {
+                Dir::Left
+            };
+            self.play_dir(action, dir, now, sprites);
+        } else {
+            self.play(action, now, sprites);
+        }
     }
 
     /// Reacts to a poke with a random action from `actions::REACTIONS`, at
@@ -872,6 +919,7 @@ impl Pal {
             frame,
             secs: 0.0,
             prop: None,
+            speed: 0.0,
         };
         match (&self.motion, self.mood) {
             (
@@ -1204,6 +1252,63 @@ mod tests {
         assert!(matches!(pal.motion, Motion::Sleep));
         assert_eq!(pal.pos.y, area.bottom - size.y - cfg.bottom_margin);
         assert!(pal.pos.x + size.x <= area.right);
+    }
+
+    /// Link swims forward to the side with more room, and he stops at the
+    /// edge of the area.
+    #[test]
+    fn swimming_link_moves_to_the_side_with_more_room() {
+        let sprites = Sprites::load(0);
+        let cfg = Config {
+            walk: false,
+            hops: false,
+            chase: false,
+            idle_sleep: false,
+            day_night: false,
+            ..Config::default()
+        };
+        let senses = Senses::default();
+        let swim = actions::find("swim").unwrap();
+        let dt = 1.0 / 60.0;
+        let size = Pal::window_size(cfg.scale);
+        for (x, dir) in [(100.0, Dir::Right), (800.0, Dir::Left)] {
+            let area = Area {
+                left: 0.0,
+                top: 0.0,
+                right: 1000.0,
+                bottom: 600.0,
+            };
+            let mut pal = Pal::new(pos2(x, area.bottom - size.y));
+            let room = (x - area.left, area.right - size.x - x);
+            pal.play_in_room(swim, 0.0, &sprites, room);
+            assert_eq!(pal.facing, dir);
+            let mut now = 0.0;
+            while matches!(pal.motion, Motion::Act { .. }) {
+                pal.update(now, dt as f32, area, &cfg, &sprites, true, &senses);
+                now += dt;
+            }
+            let moved = pal.pos.x - x;
+            match dir {
+                Dir::Right => assert!(moved > 20.0, "moved {moved}"),
+                _ => assert!(moved < -20.0, "moved {moved}"),
+            }
+        }
+        // Near the edge, Link swims in place at the edge.
+        let area = Area {
+            left: 0.0,
+            top: 0.0,
+            right: size.x + 10.0,
+            bottom: 600.0,
+        };
+        let mut pal = Pal::new(pos2(5.0, area.bottom - size.y));
+        pal.play_dir(swim, Dir::Right, 0.0, &sprites);
+        let mut now = 0.0;
+        while matches!(pal.motion, Motion::Act { .. }) {
+            pal.update(now, dt as f32, area, &cfg, &sprites, true, &senses);
+            now += dt;
+        }
+        let margin = (size.x - BODY_WIDTH * cfg.scale as f32) / 2.0;
+        assert!(pal.pos.x <= area.right - size.x + margin + 0.01);
     }
 
     #[test]
