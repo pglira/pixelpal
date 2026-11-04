@@ -58,6 +58,7 @@ struct Shared {
     /// The window of the pal and the usable area of its monitor.
     anchor: Option<(Bounds, Bounds)>,
     panel_open: bool,
+    menu_open: bool,
     menu_had_focus: bool,
     chat_key_error: Option<String>,
     pal_key_error: Option<String>,
@@ -367,32 +368,61 @@ fn set_icon(win: &WebviewWindow, icon: Option<Image<'static>>) {
     }
 }
 
-fn open_menu(app: &AppHandle, state: &App, x: i32, y: i32) {
-    close_window(app, MENU);
-    let mut s = state.lock();
-    s.menu_had_focus = false;
-    let icon = s.icon.clone();
-    drop(s);
-    let built = window(app, MENU, "menu.html", ipc::MENU_TITLE)
+/// Builds the hidden menu window. The menu window stays for the run of the
+/// program, so that a right-click only moves and shows it.
+fn build_menu<R: tauri::Runtime, M: Manager<R>>(app: &M) -> tauri::Result<WebviewWindow<R>> {
+    WebviewWindowBuilder::new(app, MENU, WebviewUrl::App("menu.html".into()))
+        .title(ipc::MENU_TITLE)
         .inner_size(MENU_SIZE.0, MENU_SIZE.1)
         .decorations(false)
         .resizable(false)
         .always_on_top(true)
         .skip_taskbar(true)
         .visible(false)
-        .build();
-    match built {
-        Ok(win) => {
-            set_icon(&win, icon);
-            let _ = win.set_position(PhysicalPosition::new(x, y - MENU_SIZE.1 as i32));
-            let _ = win.show();
-            let _ = win.set_focus();
-            to_pal(ToPal::Window {
-                window: Window::Menu,
-                open: true,
-            });
-        }
-        Err(e) => eprintln!("pixelpal-chat: cannot open the menu: {e}"),
+        .build()
+}
+
+fn open_menu(app: &AppHandle, state: &App, x: i32, y: i32) {
+    let win = match app.get_webview_window(MENU) {
+        Some(win) => win,
+        None => match build_menu(app) {
+            Ok(win) => {
+                set_icon(&win, state.lock().icon.clone());
+                win
+            }
+            Err(e) => {
+                eprintln!("pixelpal-chat: cannot open the menu: {e}");
+                return;
+            }
+        },
+    };
+    let mut s = state.lock();
+    s.menu_had_focus = false;
+    let panel_open = s.panel_open;
+    let was_open = std::mem::replace(&mut s.menu_open, true);
+    drop(s);
+    let _ = app.emit_to(MENU, "menu", panel_open);
+    let _ = win.set_position(PhysicalPosition::new(x, y - MENU_SIZE.1 as i32));
+    let _ = win.show();
+    let _ = win.set_focus();
+    if !was_open {
+        to_pal(ToPal::Window {
+            window: Window::Menu,
+            open: true,
+        });
+    }
+}
+
+/// Hides the menu window.
+fn close_menu(app: &AppHandle, state: &App) {
+    if let Some(win) = app.get_webview_window(MENU) {
+        let _ = win.hide();
+    }
+    if std::mem::replace(&mut state.lock().menu_open, false) {
+        to_pal(ToPal::Window {
+            window: Window::Menu,
+            open: false,
+        });
     }
 }
 
@@ -444,7 +474,7 @@ fn read_pal(app: AppHandle, state: AppState) {
 fn handle_pal(app: &AppHandle, state: &App, msg: ToChat) {
     match msg {
         ToChat::TogglePanel => {
-            close_window(app, MENU);
+            close_menu(app, state);
             if state.lock().panel_open {
                 hide_panel(app, state);
             } else {
@@ -452,7 +482,7 @@ fn handle_pal(app: &AppHandle, state: &App, msg: ToChat) {
             }
         }
         ToChat::HidePanel => {
-            close_window(app, MENU);
+            close_menu(app, state);
             hide_panel(app, state);
         }
         ToChat::Anchor { pal, area } => {
@@ -776,7 +806,7 @@ fn menu_view(state: State<'_, AppState>) -> bool {
 
 #[tauri::command]
 fn menu_action(action: String, app: AppHandle, state: State<'_, AppState>) {
-    close_window(&app, MENU);
+    close_menu(&app, &state);
     match action.as_str() {
         "chat" => {
             if state.lock().panel_open {
@@ -942,6 +972,7 @@ fn main() {
             session: Session::default(),
             anchor: None,
             panel_open: false,
+            menu_open: false,
             menu_had_focus: false,
             chat_key_error: None,
             pal_key_error: None,
@@ -1031,12 +1062,12 @@ fn main() {
                 // The menu closes when it loses the focus after it had it.
                 (MENU, WindowEvent::Focused(true)) => state.lock().menu_had_focus = true,
                 (MENU, WindowEvent::Focused(false)) if state.lock().menu_had_focus => {
-                    close_window(app, MENU);
+                    close_menu(app, &state);
                 }
-                (MENU, WindowEvent::Destroyed) => to_pal(ToPal::Window {
-                    window: Window::Menu,
-                    open: false,
-                }),
+                (MENU, WindowEvent::CloseRequested { api, .. }) => {
+                    api.prevent_close();
+                    close_menu(app, &state);
+                }
                 (SETTINGS, WindowEvent::Destroyed) => to_pal(ToPal::Window {
                     window: Window::Settings,
                     open: false,
@@ -1059,6 +1090,7 @@ fn main() {
                 .skip_taskbar(true)
                 .visible(false)
                 .build()?;
+            build_menu(app)?;
             let (h2, s2) = (handle.clone(), state.clone());
             std::thread::spawn(move || stream_changes(h2, s2));
             let s3 = state.clone();
