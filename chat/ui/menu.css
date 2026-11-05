@@ -17,7 +17,10 @@ body {
   font: 14px system-ui, sans-serif;
   border: 1px solid var(--border);
 }
-nav { display: flex; flex-direction: column; gap: 6px; padding: 8px; }
+/* The buttons share the height of the window, so that the space above the
+   first button and below the last button is the same. */
+nav { display: flex; flex-direction: column; gap: 6px; padding: 8px; height: 100%; }
+nav button { flex: 1; }
 button {
   font: inherit;
   color: inherit;
