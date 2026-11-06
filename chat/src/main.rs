@@ -208,6 +208,8 @@ struct ChatView {
     messages: Vec<MessageView>,
     state: StateView,
     theme: ThemeView,
+    /// Height of the input field in pixels. 0 means the default height.
+    input_height: f32,
 }
 
 #[derive(Clone, Serialize)]
@@ -225,6 +227,7 @@ fn chat_view_of(s: &mut Shared) -> ChatView {
         messages: s.session.messages.iter().map(message_view).collect(),
         state: state_view(s),
         theme: theme_view(&s.cfg.theme, s.font_version),
+        input_height: s.cfg.input_height,
     }
 }
 
@@ -848,6 +851,16 @@ fn resize_end(left: bool, right: bool, top: bool, app: AppHandle, state: State<'
     }
 }
 
+/// Stores the height of the input field of the chat panel. 0 means the
+/// default height.
+#[tauri::command]
+fn set_input_height(height: f32, state: State<'_, AppState>) {
+    let mut s = state.lock();
+    s.cfg.input_height = height;
+    s.cfg.sanitize();
+    s.cfg.save();
+}
+
 // ---- Commands of the menu ----
 
 #[tauri::command]
@@ -932,6 +945,9 @@ fn apply_settings(
             .apply_autostart(&s.pal_exe)
             .map_err(|e| format!("Autostart: {e}"))?;
     }
+    // The chat panel changes the height of its input field, which the
+    // settings window does not show.
+    draft.input_height = s.cfg.input_height;
     // The model selector of the chat panel can change the model while the
     // settings window is open.
     if draft.models.contains(&s.cfg.model) {
@@ -1085,6 +1101,7 @@ fn main() {
             resize_begin,
             resize_by,
             resize_end,
+            set_input_height,
             menu_view,
             menu_action,
             get_settings,

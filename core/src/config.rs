@@ -107,6 +107,9 @@ pub struct Config {
     /// Space between the bottom of the usable screen area and the bottom of
     /// the chat panel, in pixels.
     pub panel_gap: f32,
+    /// Height of the input field of the chat panel, in pixels. 0 means the
+    /// height of three lines.
+    pub input_height: f32,
     pub autostart: bool,
     /// Global shortcut that opens or closes the chat panel, such as
     /// `Super+Shift+C`. Empty means no shortcut.
@@ -156,6 +159,7 @@ impl Default for Config {
             panel_width: 420.0,
             panel_height: 560.0,
             panel_gap: 100.0,
+            input_height: 0.0,
             autostart: false,
             chat_shortcut: String::new(),
             pal_shortcut: String::new(),
@@ -205,6 +209,7 @@ impl Config {
         self.panel_width = fix(self.panel_width, 280.0, 8000.0, d.panel_width);
         self.panel_height = fix(self.panel_height, 240.0, 8000.0, d.panel_height);
         self.panel_gap = fix(self.panel_gap, 0.0, 4000.0, d.panel_gap);
+        self.input_height = fix(self.input_height, 0.0, 8000.0, d.input_height);
         if self.models.is_empty() {
             self.models = d.models;
         }

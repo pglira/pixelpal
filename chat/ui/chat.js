@@ -23,6 +23,7 @@ const el = {
   stop: $("stop"),
   busy: $("busy"),
   dir: $("dir"),
+  splitter: $("splitter"),
 };
 
 let messages = [];
@@ -346,6 +347,60 @@ for (const grip of document.querySelectorAll(".grip")) {
   grip.addEventListener("lostpointercapture", end);
 }
 
+// The splitter changes the height of the input field. The messages keep a
+// minimum height, and the input field keeps the height of two lines. The
+// backend stores the height at the end of a drag. A double-click gives the
+// default height of three lines.
+const MIN_MESSAGES = 60;
+let inputHeight = 0;
+
+/// The input field takes the height `inputHeight`, inside the limits of the
+/// panel. 0 gives the default height.
+function applyInputHeight() {
+  const ta = el.input;
+  if (!inputHeight) {
+    ta.style.height = "";
+    return;
+  }
+  const line = parseFloat(getComputedStyle(ta).lineHeight) || 20;
+  const min = Math.ceil(2 * line + 14);
+  const max = el.scroll.offsetHeight + ta.offsetHeight - MIN_MESSAGES;
+  ta.style.height = Math.round(Math.max(min, Math.min(inputHeight, max))) + "px";
+}
+
+{
+  let start = null;
+  el.splitter.addEventListener("pointerdown", (ev) => {
+    if (ev.button !== 0) return;
+    ev.preventDefault();
+    el.splitter.setPointerCapture(ev.pointerId);
+    el.splitter.classList.add("dragging");
+    start = { y: ev.clientY, height: el.input.offsetHeight, stick: atBottom() };
+  });
+  el.splitter.addEventListener("pointermove", (ev) => {
+    if (!start) return;
+    inputHeight = start.height - (ev.clientY - start.y);
+    applyInputHeight();
+    if (start.stick) scrollToBottom();
+  });
+  const end = () => {
+    if (!start) return;
+    start = null;
+    el.splitter.classList.remove("dragging");
+    inputHeight = el.input.offsetHeight;
+    invoke("set_input_height", { height: inputHeight });
+  };
+  el.splitter.addEventListener("pointerup", end);
+  el.splitter.addEventListener("pointercancel", end);
+  el.splitter.addEventListener("lostpointercapture", end);
+  el.splitter.addEventListener("dblclick", () => {
+    inputHeight = 0;
+    applyInputHeight();
+    invoke("set_input_height", { height: 0 });
+  });
+  window.addEventListener("resize", applyInputHeight);
+}
+
 el.model.onchange = () => invoke("set_model", { model: el.model.value });
 el.newChat.onclick = () => {
   invoke("new_chat");
@@ -389,6 +444,8 @@ function reset(view) {
   messages = view.messages;
   state = view.state;
   applyTheme(view.theme);
+  inputHeight = view.input_height;
+  applyInputHeight();
   renderMessages();
   renderState();
   scrollToBottom();
