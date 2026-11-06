@@ -278,6 +278,12 @@ function panel() {
     "The space between the bottom of the screen and the bottom of the chat panel.",
     number("panel_gap", { min: 0, max: 4000, unit: "px" }),
   );
+  row(
+    size,
+    "Wrap code lines",
+    "Long lines in code blocks continue on the next line. Without the wrap, a code block scrolls to the side.",
+    check("code_wrap"),
+  );
   const t = grid();
   const preset = (name, theme) => {
     const b = node("button", { textContent: name });

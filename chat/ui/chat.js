@@ -179,7 +179,8 @@ function updateSend() {
 }
 
 function applyTheme(t) {
-  const root = document.documentElement.style;
+  const html = document.documentElement;
+  const root = html.style;
   root.setProperty("--bg", t.background);
   root.setProperty("--text", t.text);
   root.setProperty("--input-bg", t.input_background);
@@ -187,6 +188,7 @@ function applyTheme(t) {
   root.setProperty("--accent", t.accent);
   root.setProperty("--font-size", t.font_size + "px");
   root.setProperty("color-scheme", t.dark ? "dark" : "light");
+  html.classList.toggle("code-wrap", t.code_wrap);
   let face = $("font-face");
   if (!face) {
     face = document.createElement("style");

@@ -132,6 +132,7 @@ pre {
   overflow-x: auto;
 }
 pre code { padding: 0; background: none; }
+.code-wrap pre { white-space: pre-wrap; }
 pre { position: relative; }
 pre .copy {
   position: absolute;

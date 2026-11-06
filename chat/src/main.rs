@@ -136,9 +136,12 @@ struct ThemeView {
     font_size: f32,
     /// The URL of the font file, or `None` for the default font.
     font_url: Option<String>,
+    /// Wraps long lines in code blocks.
+    code_wrap: bool,
 }
 
-fn theme_view(t: &ChatTheme, font_version: u32) -> ThemeView {
+fn theme_view(cfg: &Config, font_version: u32) -> ThemeView {
+    let t = &cfg.theme;
     let alpha = t.opacity.clamp(0.0, 1.0);
     let rgba = |c: [u8; 3]| format!("rgba({}, {}, {}, {alpha})", c[0], c[1], c[2]);
     let rgb = |c: [u8; 3]| format!("rgb({}, {}, {})", c[0], c[1], c[2]);
@@ -152,6 +155,7 @@ fn theme_view(t: &ChatTheme, font_version: u32) -> ThemeView {
         font_size: t.font_size,
         font_url: (font_error(&t.font_file).is_none() && !t.font_file.trim().is_empty())
             .then(|| format!("pxfont://localhost/font?v={font_version}")),
+        code_wrap: cfg.code_wrap,
     }
 }
 
@@ -226,7 +230,7 @@ fn chat_view_of(s: &mut Shared) -> ChatView {
     ChatView {
         messages: s.session.messages.iter().map(message_view).collect(),
         state: state_view(s),
-        theme: theme_view(&s.cfg.theme, s.font_version),
+        theme: theme_view(&s.cfg, s.font_version),
         input_height: s.cfg.input_height,
     }
 }
@@ -969,7 +973,7 @@ fn apply_settings(
     {
         place_panel(&win, &s);
     }
-    let _ = app.emit_to(CHAT, "theme", theme_view(&s.cfg.theme, s.font_version));
+    let _ = app.emit_to(CHAT, "theme", theme_view(&s.cfg, s.font_version));
     s.state_dirty = true;
     let view = settings_view(&s);
     drop(s);
